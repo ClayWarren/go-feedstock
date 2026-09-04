@@ -59,13 +59,17 @@ git --exec-path
 if errorlevel 1 exit /b 1
 
 rem Go 1.27 registers package names without the old go_test: prefix.
-rem Assert that the diagnostic names exist before allowing their failures.
+rem Assert exact diagnostic names using line-aware reads, before allowing
+rem their failures. Print the list if an expected name is missing.
 go tool dist test -list > dist_tests.txt
 if errorlevel 1 exit /b 1
-for %%T in (os cmd/go cmd/gofmt) do (
-  findstr /L /X /C:"%%T" dist_tests.txt >nul
-  if errorlevel 1 exit /b 1
-)
+powershell -NoLogo -NoProfile -NonInteractive -Command ^
+  "$ErrorActionPreference = 'Stop';" ^
+  "$tests = @(Get-Content -LiteralPath 'dist_tests.txt');" ^
+  "foreach ($name in @('os', 'cmd/go', 'cmd/gofmt')) {" ^
+  "  if ($tests -cnotcontains $name) { $tests; throw ('Missing dist test: ' + $name) }" ^
+  "}"
+if errorlevel 1 exit /b 1
 
 for /f "delims=" %%G in ('go env GOHOSTOS') do if /I not "%%G"=="windows" exit /b 1
 for /f "delims=" %%G in ('go env GOHOSTARCH') do if /I not "%%G"=="arm64" exit /b 1
