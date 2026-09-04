@@ -1,23 +1,27 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: conda-forge go-feedstock maintainers <noreply@conda-forge.org>
 Date: Thu, 3 Sep 2026 00:00:00 +0000
-Subject: [PATCH 10/10] Support conda's Windows ARM64 CGo toolchain
+Subject: [PATCH] Support conda's Windows ARM64 CGo toolchain
 
-Go's MSVC-target Clang support requires lld-link, but Clang selects
-link.exe by default. Add the supported linker selection to conda's
-Windows ARM64 defaults and make Go's lld probe inspect the same effective
-linker flags that the final host-link command receives.
+Select lld-link for the MSVC-target Clang toolchain and include the
+effective linker flags in Go's lld probe. Keep conda's exact native
+Windows ARM64 compiler and linker defaults compatible with internal
+linking without broadening package-supplied #cgo flag validation. When
+-nostdlib and lld are active, test response-file support with an explicit
+no-CRT Windows entry point.
 ---
- src/cmd/go/internal/work/exec.go          |  6 ++++++
- src/cmd/go/internal/work/security.go      |  7 ++++++-
- src/cmd/go/internal/work/security_test.go | 10 ++++++++++
- src/cmd/link/internal/ld/lib.go           |  3 ++-
- 4 files changed, 24 insertions(+), 2 deletions(-)
+ src/cmd/go/internal/work/exec.go          |  6 ++
+ src/cmd/go/internal/work/security.go      | 38 ++++++++++++-
+ src/cmd/go/internal/work/security_test.go | 68 +++++++++++++++++++++++
+ src/cmd/link/internal/ld/ld_test.go       | 27 +++++++++
+ src/cmd/link/internal/ld/lib.go           | 37 +++++++++---
+ 5 files changed, 165 insertions(+), 11 deletions(-)
 
 diff --git a/src/cmd/go/internal/work/exec.go b/src/cmd/go/internal/work/exec.go
+index 14a7dca8..28fe4904 100644
 --- a/src/cmd/go/internal/work/exec.go
 +++ b/src/cmd/go/internal/work/exec.go
-@@ -2644,6 +2644,7 @@ func (b *Builder) gccArchArgs() []string {
+@@ -2824,6 +2824,7 @@ func (b *Builder) gccArchArgs() []string {
  // using conda based compilers, or return the unmodified default no environment variable is found.
  // On linux, it will disable the linker's gc-sections option.
  // On mac/darwin, it will change/reset the macosx minimal version, and set the isysroot if available.
@@ -25,7 +29,7 @@ diff --git a/src/cmd/go/internal/work/exec.go b/src/cmd/go/internal/work/exec.go
  func condaGetCompilerFlags(key, def string) string {
  	if value, ok := os.LookupEnv(key); ok {
  		switch cfg.Goos {
-@@ -2667,6 +2668,11 @@ func condaGetCompilerFlags(key, def string) string {
+@@ -2845,6 +2846,11 @@ func condaGetCompilerFlags(key, def string) string {
  					value = value + " -isysroot " + sysroot
  				}
  			}
@@ -38,53 +42,257 @@ diff --git a/src/cmd/go/internal/work/exec.go b/src/cmd/go/internal/work/exec.go
  		return value
  	}
 diff --git a/src/cmd/go/internal/work/security.go b/src/cmd/go/internal/work/security.go
+index e2c53bbc..f04307b2 100644
 --- a/src/cmd/go/internal/work/security.go
 +++ b/src/cmd/go/internal/work/security.go
-@@ -242,6 +242,11 @@ var validLinkerFlags = []*lazyregexp.Regexp{
+@@ -242,6 +242,22 @@ var validLinkerFlags = []*lazyregexp.Regexp{
  	re(`\./.*\.(a|o|obj|dll|dylib|so|tbd)`),
  }
  
-+var validLinkerFlagsForInternalLink = append(
-+	[]*lazyregexp.Regexp{re(`-fuse-ld=lld`)},
-+	validLinkerFlags...,
-+)
++// These flags are injected by conda's native Windows ARM64 Clang toolchain.
++// They are not valid in package-supplied #cgo directives, but they do not make
++// the host objects incompatible with Go's internal linker.
++var validCondaWindowsARM64CompilerFlagsForInternalLink = []*lazyregexp.Regexp{
++	re(`-nostdlib`),
++	re(`-fms-runtime-lib=dll`),
++	re(`-fuse-ld=lld`),
++	re(`-fno-aligned-allocation`),
++}
++
++var validCondaWindowsARM64LinkerFlagsForInternalLink = []*lazyregexp.Regexp{
++	re(`-nostdlib`),
++	re(`-fuse-ld=lld`),
++	re(`-Wl,-defaultlib:[^,@]+`),
++}
 +
  var validLinkerFlagsWithNextArg = []string{
  	"-arch",
  	"-F",
-@@ -354,7 +359,7 @@ func checkCompilerFlagsForInternalLink(name, source string, list []string) erro
+@@ -330,8 +346,17 @@ func checkPkgConfigFlags(name, source string, list []string) error {
+ // internal linking (meaning that we should punt the link to the
+ // external linker).
+ func checkCompilerFlagsForInternalLink(name, source string, list []string) error {
++	return checkCompilerFlagsForInternalLinkTarget(name, source, list, cfg.Goos, cfg.Goarch)
++}
++
++func checkCompilerFlagsForInternalLinkTarget(name, source string, list []string, goos, goarch string) error {
+ 	checkOverrides := false
+-	if err := checkFlags(name, source, list, nil, validCompilerFlags, validCompilerFlagsWithNextArg, checkOverrides); err != nil {
++	valid := validCompilerFlags
++	if goos == "windows" && goarch == "arm64" {
++		valid = append([]*lazyregexp.Regexp{}, validCompilerFlags...)
++		valid = append(valid, validCondaWindowsARM64CompilerFlagsForInternalLink...)
++	}
++	if err := checkFlags(name, source, list, nil, valid, validCompilerFlagsWithNextArg, checkOverrides); err != nil {
+ 		return err
+ 	}
+ 	// Currently the only flag on the allow list that causes problems
+@@ -352,8 +377,17 @@ func checkCompilerFlagsForInternalLink(name, source string, list []string) error
+ // checkLinkerFlagsForInternalLink returns an error if 'list'
  // contains linker flags that are not compatible with internal linking.
  func checkLinkerFlagsForInternalLink(name, source string, list []string) error {
++	return checkLinkerFlagsForInternalLinkTarget(name, source, list, cfg.Goos, cfg.Goarch)
++}
++
++func checkLinkerFlagsForInternalLinkTarget(name, source string, list []string, goos, goarch string) error {
  	checkOverrides := false
 -	if err := checkFlags(name, source, list, nil, validLinkerFlags, validLinkerFlagsWithNextArg, checkOverrides); err != nil {
-+	if err := checkFlags(name, source, list, nil, validLinkerFlagsForInternalLink, validLinkerFlagsWithNextArg, checkOverrides); err != nil {
++	valid := validLinkerFlags
++	if goos == "windows" && goarch == "arm64" {
++		valid = append([]*lazyregexp.Regexp{}, validLinkerFlags...)
++		valid = append(valid, validCondaWindowsARM64LinkerFlagsForInternalLink...)
++	}
++	if err := checkFlags(name, source, list, nil, valid, validLinkerFlagsWithNextArg, checkOverrides); err != nil {
  		return err
  	}
  	// Flags that force static linking require the external linker
 diff --git a/src/cmd/go/internal/work/security_test.go b/src/cmd/go/internal/work/security_test.go
+index 48f98100..68cd6de6 100644
 --- a/src/cmd/go/internal/work/security_test.go
 +++ b/src/cmd/go/internal/work/security_test.go
-@@ -304,6 +304,16 @@ func TestCheckLinkerFlags(t *testing.T) {
+@@ -305,6 +305,74 @@ func TestCheckLinkerFlags(t *testing.T) {
  	}
  }
  
-+func TestCondaLinkerFlagScope(t *testing.T) {
-+	flags := []string{"-fuse-ld=lld"}
-+	if err := checkLinkerFlags("test", "test", flags); err == nil {
-+		t.Fatal("package-source linker validation unexpectedly accepted -fuse-ld=lld")
++func TestCondaWindowsARM64InternalLinkFlags(t *testing.T) {
++	compilerFlags := []string{
++		"-nostdlib",
++		"-fms-runtime-lib=dll",
++		"-fuse-ld=lld",
++		"-fno-aligned-allocation",
 +	}
-+	if err := checkLinkerFlagsForInternalLink("test", "test", flags); err != nil {
-+		t.Fatalf("internal-link compatibility rejected -fuse-ld=lld: %v", err)
++	for _, flag := range compilerFlags {
++		if err := checkCompilerFlags("test", "test", []string{flag}); err == nil {
++			t.Errorf("package-source compiler validation unexpectedly accepted %q", flag)
++		}
++	}
++	if err := checkCompilerFlagsForInternalLinkTarget("test", "test", compilerFlags, "windows", "amd64"); err == nil {
++		t.Fatal("non-ARM64 target unexpectedly accepted conda Windows ARM64 compiler flags")
++	}
++	if err := checkCompilerFlagsForInternalLinkTarget("test", "test", compilerFlags, "linux", "arm64"); err == nil {
++		t.Fatal("non-Windows target unexpectedly accepted conda Windows ARM64 compiler flags")
++	}
++	if err := checkCompilerFlagsForInternalLinkTarget("test", "test", compilerFlags, "windows", "arm64"); err != nil {
++		t.Fatalf("internal-link compatibility rejected conda Windows ARM64 compiler flags: %v", err)
++	}
++
++	linkerFlags := []string{
++		"-nostdlib",
++		"-fuse-ld=lld",
++		"-Wl,-defaultlib:C:/conda/clang_rt.builtins-aarch64.lib",
++	}
++	for _, flag := range linkerFlags {
++		if err := checkLinkerFlags("test", "test", []string{flag}); err == nil {
++			t.Errorf("package-source linker validation unexpectedly accepted %q", flag)
++		}
++	}
++	if err := checkLinkerFlagsForInternalLinkTarget("test", "test", linkerFlags, "linux", "arm64"); err == nil {
++		t.Fatal("non-Windows target unexpectedly accepted conda Windows ARM64 linker flags")
++	}
++	if err := checkLinkerFlagsForInternalLinkTarget("test", "test", linkerFlags, "windows", "arm64"); err != nil {
++		t.Fatalf("internal-link compatibility rejected conda Windows ARM64 linker flags: %v", err)
++	}
++
++	for _, flag := range compilerFlags {
++		for _, suffix := range []string{"@args", ",@args", ",-bad"} {
++			smuggled := flag + suffix
++			if err := checkCompilerFlagsForInternalLinkTarget("test", "test", []string{smuggled}, "windows", "arm64"); err == nil {
++				t.Errorf("internal-link compatibility accepted unsafe compiler flag %q", smuggled)
++			}
++		}
++	}
++	for _, flag := range []string{"-fms-runtime-lib=static", "-fuse-ld=link"} {
++		if err := checkCompilerFlagsForInternalLinkTarget("test", "test", []string{flag}, "windows", "arm64"); err == nil {
++			t.Errorf("internal-link compatibility accepted unsafe compiler flag %q", flag)
++		}
++	}
++
++	for _, flag := range linkerFlags {
++		for _, suffix := range []string{"@args", ",@args", ",-bad"} {
++			smuggled := flag + suffix
++			if err := checkLinkerFlagsForInternalLinkTarget("test", "test", []string{smuggled}, "windows", "arm64"); err == nil {
++				t.Errorf("internal-link compatibility accepted unsafe linker flag %q", smuggled)
++			}
++		}
++	}
++	for _, flag := range []string{"-Wl,-defaultlib:", "-Wl,-defaultlib:@args"} {
++		if err := checkLinkerFlagsForInternalLinkTarget("test", "test", []string{flag}, "windows", "arm64"); err == nil {
++			t.Errorf("internal-link compatibility accepted unsafe linker flag %q", flag)
++		}
 +	}
 +}
 +
  func TestCheckFlagAllowDisallow(t *testing.T) {
  	if err := checkCompilerFlags("TEST", "test", []string{"-disallow"}); err == nil {
  		t.Fatalf("missing error for -disallow")
+diff --git a/src/cmd/link/internal/ld/ld_test.go b/src/cmd/link/internal/ld/ld_test.go
+index 385b5e88..27dff71a 100644
+--- a/src/cmd/link/internal/ld/ld_test.go
++++ b/src/cmd/link/internal/ld/ld_test.go
+@@ -6,6 +6,7 @@ package ld
+ 
+ import (
+ 	"bytes"
++	"cmd/internal/sys"
+ 	"debug/pe"
+ 	"fmt"
+ 	"internal/testenv"
+@@ -16,6 +17,32 @@ import (
+ 	"testing"
+ )
+ 
++func TestUseNoCRTResponseFileProbe(t *testing.T) {
++	tests := []struct {
++		name  string
++		goos  string
++		arch  *sys.Arch
++		flags []string
++		flag  string
++		want  bool
++	}{
++		{"windows arm64 conda response file", "windows", sys.ArchARM64, []string{"-nostdlib", "-fuse-ld=lld"}, "@response", true},
++		{"windows amd64", "windows", sys.ArchAMD64, []string{"-nostdlib", "-fuse-ld=lld"}, "@response", false},
++		{"linux arm64", "linux", sys.ArchARM64, []string{"-nostdlib", "-fuse-ld=lld"}, "@response", false},
++		{"standard libraries", "windows", sys.ArchARM64, []string{"-fuse-ld=lld"}, "@response", false},
++		{"nostdlib without lld", "windows", sys.ArchARM64, []string{"-nostdlib"}, "@response", false},
++		{"ordinary flag probe", "windows", sys.ArchARM64, []string{"-nostdlib", "-fuse-ld=lld"}, "-no-pie", false},
++	}
++
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			if got := useNoCRTResponseFileProbe(test.goos, test.arch, test.flags, test.flag); got != test.want {
++				t.Fatalf("useNoCRTResponseFileProbe() = %v, want %v", got, test.want)
++			}
++		})
++	}
++}
++
+ func TestUndefinedRelocErrors(t *testing.T) {
+ 	testenv.MustHaveGoBuild(t)
+ 
 diff --git a/src/cmd/link/internal/ld/lib.go b/src/cmd/link/internal/ld/lib.go
+index 9cbc1291..2238c6c9 100644
 --- a/src/cmd/link/internal/ld/lib.go
 +++ b/src/cmd/link/internal/ld/lib.go
-@@ -3187,6 +3187,7 @@ func (ctxt *Link) isLLD() bool {
+@@ -2204,16 +2204,12 @@ func (ctxt *Link) passLongArgsInResponseFile(argv []string, altLinker string) []
+ 	}
+ }
+ 
+-var createTrivialCOnce sync.Once
++var (
++	createTrivialCOnce     sync.Once
++	createTrivialNoCRTOnce sync.Once
++)
+ 
+ func linkerFlagSupported(arch *sys.Arch, linker, altLinker, flag string) bool {
+-	createTrivialCOnce.Do(func() {
+-		src := filepath.Join(*flagTmpdir, "trivial.c")
+-		if err := os.WriteFile(src, []byte("int main() { return 0; }"), 0666); err != nil {
+-			Errorf("WriteFile trivial.c failed: %v", err)
+-		}
+-	})
+-
+ 	flags := hostlinkArchArgs(arch)
+ 
+ 	moreFlags := trimLinkerArgv(append(ldflag, flagExtldflags...))
+@@ -2223,6 +2219,21 @@ func linkerFlagSupported(arch *sys.Arch, linker, altLinker, flag string) bool {
+ 		flags = append(flags, "-fuse-ld="+altLinker)
+ 	}
+ 	trivialPath := filepath.Join(*flagTmpdir, "trivial.c")
++	if useNoCRTResponseFileProbe(buildcfg.GOOS, arch, moreFlags, flag) {
++		trivialPath = filepath.Join(*flagTmpdir, "trivial-nocrt.c")
++		createTrivialNoCRTOnce.Do(func() {
++			if err := os.WriteFile(trivialPath, []byte("void mainCRTStartup(void) {}"), 0666); err != nil {
++				Errorf("WriteFile trivial-nocrt.c failed: %v", err)
++			}
++		})
++		flags = append(flags, "-Wl,-entry:mainCRTStartup", "-Wl,-subsystem:console")
++	} else {
++		createTrivialCOnce.Do(func() {
++			if err := os.WriteFile(trivialPath, []byte("int main() { return 0; }"), 0666); err != nil {
++				Errorf("WriteFile trivial.c failed: %v", err)
++			}
++		})
++	}
+ 	outPath := filepath.Join(*flagTmpdir, "a.out")
+ 	flags = append(flags, "-o", outPath, flag, trivialPath)
+ 
+@@ -2234,6 +2245,13 @@ func linkerFlagSupported(arch *sys.Arch, linker, altLinker, flag string) bool {
+ 	return err == nil && !bytes.Contains(out, []byte("unrecognized")) && !bytes.Contains(out, []byte("unknown"))
+ }
+ 
++func useNoCRTResponseFileProbe(goos string, arch *sys.Arch, linkerFlags []string, flag string) bool {
++	return goos == "windows" && arch.Family == sys.ARM64 &&
++		strings.HasPrefix(flag, "@") &&
++		slices.Contains(linkerFlags, "-nostdlib") &&
++		slices.Contains(linkerFlags, "-fuse-ld=lld")
++}
++
+ // peHasLoadConfigDirectorySupport checks whether the external linker
+ // populates the PE Load Configuration Directory data directory entry
+ // when it encounters a _load_config_used symbol.
+@@ -3186,7 +3204,8 @@ func (ctxt *Link) isMSVC() bool {
+ func (ctxt *Link) isLLD() bool {
  	extld := ctxt.extld()
  	name, args := extld[0], extld[1:]
 -	args = append(args, trimLinkerArgv(flagExtldflags)...)
@@ -94,4 +302,4 @@ diff --git a/src/cmd/link/internal/ld/lib.go b/src/cmd/link/internal/ld/lib.go
  	cmd := exec.Command(name, args...)
  	if out, err := cmd.CombinedOutput(); err == nil {
 -- 
-2.51.0
+2.54.0 (Apple Git-156)

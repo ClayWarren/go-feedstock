@@ -3,11 +3,13 @@
 rem Some of the windows build hosts can be a bit slow.  Allow the tests to run longer on windows under cgo.
 set "GO_TEST_TIMEOUT_SCALE=4"
 
-rem Put TMP on the same drive as the conda prefix (the D drive),
-rem to avoid a known issue in the go test suite:
+rem Keep the established win-64 same-drive workaround for the Go test suite.
 rem https://github.com/golang/go/issues/24846#issuecomment-381380628
-set TMP=%PREFIX%\tmp
-mkdir "%TMP%"
+rem Native win-arm64 runners provide TEMP and TMP with runner-owned ACLs.
+if /I not "%target_platform%"=="win-arm64" (
+  set "TMP=%PREFIX%\tmp"
+  mkdir "%PREFIX%\tmp"
+)
 
 
 rem Batch equivalent to backticks
