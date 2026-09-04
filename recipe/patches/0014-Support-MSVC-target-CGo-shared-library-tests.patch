@@ -1,0 +1,162 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ClayWarren <warren.clay@icloud.com>
+Date: Fri, 4 Sep 2026 00:00:00 +0000
+Subject: [PATCH] cmd/cgo/internal/testso: support MSVC-target Clang
+
+The shared-library tests pass GNU import-library flags to every Windows
+linker and omit CGo's configured compile and link flags. With conda's
+MSVC-target Clang this invokes LINK with -out-implib instead of selecting
+lld-link and using -implib:.
+
+Read the effective flags from go env, preserving their quoting, and
+probe the compiler's target macros to select the import-library option.
+Keep the existing GNU linker spelling for MinGW. Use _WIN32 in the
+Windows fixture guards and include the shared variable's export
+declaration when building its DLL. This preserves the callback and
+imported-variable checks instead of skipping either test.
+
+Validated with both functional tests on macOS ARM64; ARM64 MSVC-target
+DLL and import-library cross-links plus a linked consumer; and the
+MinGW import-library and Linux shared-object fixture paths. Native
+Windows execution remains required.
+
+---
+diff --git a/src/cmd/cgo/internal/testso/so_test.go b/src/cmd/cgo/internal/testso/so_test.go
+index 48eb97c..65cef66 100644
+--- a/src/cmd/cgo/internal/testso/so_test.go
++++ b/src/cmd/cgo/internal/testso/so_test.go
+@@ -6,6 +6,8 @@ package so_test
+ 
+ import (
+ 	"cmd/cgo/internal/cgotest"
++	"cmd/internal/quoted"
++	"encoding/json"
+ 	"internal/testenv"
+ 	"log"
+ 	"os"
+@@ -46,7 +48,7 @@ func testSO(t *testing.T, dir string) {
+ 		log.Panic(err)
+ 	}
+ 
+-	cmd := exec.Command("go", "env", "CC", "GOGCCFLAGS")
++	cmd := exec.Command(testenv.GoToolPath(t), "env", "-json", "CC", "GOGCCFLAGS", "CGO_CPPFLAGS", "CGO_CFLAGS", "CGO_LDFLAGS")
+ 	cmd.Dir = modRoot
+ 	cmd.Stderr = new(strings.Builder)
+ 	cmd.Env = append(os.Environ(), "GOPATH="+GOPATH)
+@@ -54,20 +56,28 @@ func testSO(t *testing.T, dir string) {
+ 	if err != nil {
+ 		t.Fatalf("%#q: %v\n%s", cmd, err, cmd.Stderr)
+ 	}
+-	lines := strings.Split(string(out), "\n")
+-	if len(lines) != 3 || lines[2] != "" {
+-		t.Fatalf("Unexpected output from %q:\n%s", cmd, lines)
++	var env map[string]string
++	if err := json.Unmarshal(out, &env); err != nil {
++		t.Fatalf("parsing %q output: %v\n%s", cmd, err, out)
+ 	}
+-
+-	cc := lines[0]
++	flags := func(key string) []string {
++		args, err := quoted.Split(env[key])
++		if err != nil {
++			t.Fatalf("parsing %s: %v", key, err)
++		}
++		return args
++	}
++	cc := env["CC"]
+ 	if cc == "" {
+ 		t.Fatal("CC environment variable (go env CC) cannot be empty")
+ 	}
+-	gogccflags := strings.Split(lines[1], " ")
++	ccargs := flags("GOGCCFLAGS")
++	ccargs = append(ccargs, flags("CGO_CPPFLAGS")...)
++	ccargs = append(ccargs, flags("CGO_CFLAGS")...)
+ 
+ 	// build shared object
+ 	ext := "so"
+-	args := append(gogccflags, "-shared")
++	args := append(append([]string{}, ccargs...), "-shared")
+ 	switch runtime.GOOS {
+ 	case "darwin", "ios":
+ 		ext = "dylib"
+@@ -78,14 +88,29 @@ func testSO(t *testing.T, dir string) {
+ 		// At least in mingw-clang it is not permitted to just name a .dll
+ 		// on the command line. You must name the corresponding import
+ 		// library instead, even though the dll is used when the executable is run.
+-		args = append(args, "-Wl,-out-implib,libcgosotest.a")
++		// Probe the effective compiler target, including flags from go env.
++		// MSVC-target Clang requires the MSVC spelling of the linker option.
++		probeArgs := append(append([]string{}, ccargs...), "-dM", "-E", "-x", "c", "-")
++		probe := exec.Command(cc, probeArgs...)
++		probe.Dir = modRoot
++		probe.Env = cmd.Env
++		macros, err := probe.CombinedOutput()
++		if err != nil {
++			t.Fatalf("%#q: %v\n%s", probe, err, macros)
++		}
++		if strings.Contains(string(macros), "#define _MSC_VER ") {
++			args = append(args, "-Wl,-implib:libcgosotest.a")
++		} else {
++			args = append(args, "-Wl,-out-implib,libcgosotest.a")
++		}
+ 	case "aix":
+ 		ext = "so.1"
+ 	}
+ 	sofname := "libcgosotest." + ext
+ 	args = append(args, "-o", sofname, "cgoso_c.c")
++	args = append(args, flags("CGO_LDFLAGS")...)
+ 
+ 	cmd = exec.Command(cc, args...)
+ 	cmd.Dir = modRoot
+ 	cmd.Env = append(os.Environ(), "GOPATH="+GOPATH)
+ 	out, err = cmd.CombinedOutput()
+diff --git a/src/cmd/cgo/internal/testso/testdata/so/cgoso.c b/src/cmd/cgo/internal/testso/testdata/so/cgoso.c
+index 612e5d3..b670f77 100644
+--- a/src/cmd/cgo/internal/testso/testdata/so/cgoso.c
++++ b/src/cmd/cgo/internal/testso/testdata/so/cgoso.c
+@@ -4,7 +4,7 @@
+ 
+ #include "_cgo_export.h"
+ 
+-#if defined(WIN32) || defined(_AIX)
++#if defined(_WIN32) || defined(_AIX)
+ extern void setCallback(void *);
+ void init() {
+ 	setCallback(goCallback);
+diff --git a/src/cmd/cgo/internal/testso/testdata/so/cgoso_c.c b/src/cmd/cgo/internal/testso/testdata/so/cgoso_c.c
+index d5fb559..54f586d 100644
+--- a/src/cmd/cgo/internal/testso/testdata/so/cgoso_c.c
++++ b/src/cmd/cgo/internal/testso/testdata/so/cgoso_c.c
+@@ -4,7 +4,7 @@
+ 
+ //go:build ignore
+ 
+-#ifdef WIN32
++#ifdef _WIN32
+ // A Windows DLL is unable to call an arbitrary function in
+ // the main executable. Work around that by making the main
+ // executable pass the callback function pointer to us.
+diff --git a/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.c b/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.c
+index 36f4d57..3ed18c2 100644
+--- a/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.c
++++ b/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.c
+@@ -4,4 +4,6 @@
+ 
+ //go:build ignore
+ 
++#include "cgoso_c.h"
++
+ const char *exported_var = "Hello world";
+diff --git a/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.h b/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.h
+index eccd8c0..cd26452 100644
+--- a/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.h
++++ b/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.h
+@@ -4,7 +4,7 @@
+ 
+ //go:build ignore
+ 
+-#ifdef WIN32
++#ifdef _WIN32
+ #if defined(EXPORT_DLL)
+ #    define VAR __declspec(dllexport)
+ #elif defined(IMPORT_DLL)

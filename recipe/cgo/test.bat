@@ -39,6 +39,7 @@ if errorlevel 1 exit 1
 goto :done
 
 :win_arm64_tests
+setlocal DisableDelayedExpansion
 rem cmd/dist resolves go and gofmt under GOROOT, while the conda package
 rem exposes them from PREFIX\bin. Restore the canonical layout only in this
 rem disposable test prefix.
@@ -52,13 +53,27 @@ if errorlevel 1 exit /b 1
 copy /Y "%PREFIX%\bin\gofmt.exe" "%GO_ROOT%\bin\gofmt.exe"
 if errorlevel 1 exit /b 1
 
-rem Retain the historically tolerated Windows diagnostics, but make the
-rem complementary expected-pass suite authoritative for win-arm64.
-go tool dist test -k -v -no-rebuild -run=^^go_test:os$ || cmd /K "exit /b 0"
-go tool dist test -k -v -no-rebuild -run=^^go_test:cmd/go$ || cmd /K "exit /b 0"
-go tool dist test -k -v -no-rebuild -run=^^go_test:cmd/gofmt$ || cmd /K "exit /b 0"
-go tool dist test -v -no-rebuild -run=!^^go_test:os^|go_test:cmd/go^|go_test:cmd/gofmt$
+rem vcweb changes USER and USERPROFILE for its fixtures. Use the runner's
+rem native Git, not the build tooling's MSYS2 Git and its POSIX ownership view.
+if not exist "%ProgramFiles%\Git\bin\git.exe" (
+  echo Native Git for Windows is required for the ARM64 package tests.
+  exit /b 1
+)
+set "PATH=%ProgramFiles%\Git\bin;%PATH%"
+where git
+git version --build-options
 if errorlevel 1 exit /b 1
+git --exec-path
+if errorlevel 1 exit /b 1
+
+rem Go 1.27 registers package names without the old go_test: prefix.
+rem Assert that the diagnostic names exist before allowing their failures.
+go tool dist test -list > dist_tests.txt
+if errorlevel 1 exit /b 1
+for %%T in (os cmd/go cmd/gofmt) do (
+  findstr /L /X /C:"%%T" dist_tests.txt >nul
+  if errorlevel 1 exit /b 1
+)
 
 for /f "delims=" %%G in ('go env GOHOSTOS') do if /I not "%%G"=="windows" exit /b 1
 for /f "delims=" %%G in ('go env GOHOSTARCH') do if /I not "%%G"=="arm64" exit /b 1
@@ -138,6 +153,21 @@ powershell -NoLogo -NoProfile -NonInteractive -Command ^
   "  if ($machine -ne 0xaa64) { Write-Error ('{0}: expected PE Machine AA64, got 0x{1:X4}' -f $file, $machine); exit 1 }" ^
   "}"
 if errorlevel 1 exit /b 1
+
+rem Run the focused native checks before the longer standard-library suite.
+rem Preserve only the existing Windows diagnostic exceptions, using actual
+rem package names. All remaining package and variant tests stay authoritative.
+go tool dist test -k -v -no-rebuild os cmd/go cmd/gofmt
+if errorlevel 1 echo Historical Windows diagnostic tests failed; see the log above.
+go tool dist test -k -v -no-rebuild "-run=!^(os|cmd/go|cmd/gofmt)$"
+if errorlevel 1 (
+  rem Compare the explicit-root verifier with Windows system trust, without
+  rem modifying certificate stores or masking the authoritative suite failure.
+  go test -count=1 -v "-run=^Test(Go|System)Verify$/^SHA-384$" crypto/x509
+  certutil -store -v Root A8985D3A65E5E5C4B2D7D66D40C6DD2FB19C5436
+  certutil -user -store -v Root A8985D3A65E5E5C4B2D7D66D40C6DD2FB19C5436
+  exit /b 1
+)
 
 :done
 exit /b 0

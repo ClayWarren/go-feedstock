@@ -25,6 +25,8 @@ source:
       - patches/0010-Support-conda-s-Windows-ARM64-CGo-toolchain.patch
       - patches/0011-Fix-cgo-complex-test-for-Windows-Clang.patch
       - patches/0012-Support-CGo-tests-with-Windows-Clang.patch
+      - patches/0013-Handle-no-duplicates-PE-COMDAT-sections.patch
+      - patches/0014-Support-MSVC-target-CGo-shared-library-tests.patch
 
   # Update this with a release from https://go.dev/dl/
   - if: build_platform == "linux-64"
