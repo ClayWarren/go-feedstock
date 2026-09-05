@@ -1,4 +1,4 @@
-From 32bca74fcff89c6f7e4ee5c2e5a840888fcba756 Mon Sep 17 00:00:00 2001
+From b624b7fd3c2e3aa280385e173527e10dda307344 Mon Sep 17 00:00:00 2001
 From: ClayWarren <warren.clay@icloud.com>
 Date: Sat, 5 Sep 2026 16:55:32 -0500
 Subject: [PATCH] cmd/cgo: resolve MSVC data imports through C addresses
@@ -13,8 +13,8 @@ Keep other targets, gccgo, godefs, macros, and function-address bindings unchang
  .../internal/testso/testdata/sovar/cgoso_c.h  |  2 +
  src/cmd/cgo/main.go                           |  2 +
  src/cmd/cgo/msvc_vars_test.go                 | 64 +++++++++++++++++++
- src/cmd/cgo/out.go                            |  8 ++-
- 7 files changed, 133 insertions(+), 2 deletions(-)
+ src/cmd/cgo/out.go                            |  9 ++-
+ 7 files changed, 134 insertions(+), 2 deletions(-)
  create mode 100644 src/cmd/cgo/msvc_vars_test.go
 
 diff --git a/src/cmd/cgo/gcc.go b/src/cmd/cgo/gcc.go
@@ -224,10 +224,18 @@ index 00000000..e0d4ffee
 +	}
 +}
 diff --git a/src/cmd/cgo/out.go b/src/cmd/cgo/out.go
-index 151000f5..3029edc3 100644
+index 151000f5..cab2a23d 100644
 --- a/src/cmd/cgo/out.go
 +++ b/src/cmd/cgo/out.go
-@@ -176,7 +176,7 @@ func (p *Package) writeDefs() {
+@@ -42,6 +42,7 @@ func (p *Package) writeDefs() {
+ 		fc = f
+ 	}
+ 	fm := creat("_cgo_main.c")
++	defer fm.Close()
+ 
+ 	var gccgoInit strings.Builder
+ 
+@@ -176,7 +177,7 @@ func (p *Package) writeDefs() {
  			continue
  		}
  
@@ -236,7 +244,7 @@ index 151000f5..3029edc3 100644
  			if *gccgo {
  				fmt.Fprintf(fc, "extern byte *%s;\n", n.C)
  			} else {
-@@ -218,7 +218,11 @@ func (p *Package) writeDefs() {
+@@ -218,7 +219,11 @@ func (p *Package) writeDefs() {
  		if !*gccgo {
  			fmt.Fprintf(fgo2, " = (")
  			conf.Fprint(fgo2, fset, node)
