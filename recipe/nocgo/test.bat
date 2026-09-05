@@ -91,19 +91,20 @@ powershell -NoLogo -NoProfile -NonInteractive -Command ^
 if errorlevel 1 exit /b 1
 
 rem Run the focused native checks before the longer standard-library suite.
+powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0verify_fips_integrity.ps1"
+if errorlevel 1 exit /b %ERRORLEVEL%
+
 rem Preserve only the existing Windows diagnostic exceptions, using actual
 rem package names. All remaining package and variant tests stay authoritative.
 go tool dist test -k -v -no-rebuild os cmd/go cmd/gofmt
 if errorlevel 1 echo Historical Windows diagnostic tests failed; see the log above.
-go tool dist test -k -v -no-rebuild "-run=!^(os|cmd/go|cmd/gofmt)$"
-if errorlevel 1 (
-  rem Compare the explicit-root verifier with Windows system trust, without
-  rem modifying certificate stores or masking the authoritative suite failure.
-  go test -count=1 -v "-run=^Test(Go|System)Verify$/^SHA-384$" crypto/x509
-  certutil -store -v Root A8985D3A65E5E5C4B2D7D66D40C6DD2FB19C5436
-  certutil -user -store -v Root A8985D3A65E5E5C4B2D7D66D40C6DD2FB19C5436
-  exit /b 1
-)
+rem The unchanged suite needs the upstream SHA-384 fixture's public root.
+rem Opt in only on a disposable runner; the wrapper verifies native ARM64,
+rem respects explicit distrust, and removes only a root it temporarily adds.
+set "GO_TEST_ALLOW_TEMPORARY_USER_ROOT="
+if "%GITHUB_ACTIONS%"=="true" if "%RUNNER_ENVIRONMENT%"=="github-hosted" set "GO_TEST_ALLOW_TEMPORARY_USER_ROOT=1"
+powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0..\windows\run_dist_tests.ps1"
+if errorlevel 1 exit /b %ERRORLEVEL%
 
 :done
 exit /b 0

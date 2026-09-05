@@ -27,6 +27,7 @@ source:
       - patches/0012-Support-CGo-tests-with-Windows-Clang.patch
       - patches/0013-Handle-no-duplicates-PE-COMDAT-sections.patch
       - patches/0014-Support-MSVC-target-CGo-shared-library-tests.patch
+      - patches/0015-Require-CGo-for-FIPS-external-link-tests.patch
 
   # Update this with a release from https://go.dev/dl/
   - if: build_platform == "linux-64"
@@ -117,6 +118,8 @@ outputs:
       - files:
           recipe:
             - ${{ go_variant_str }}/
+            - if: target_platform == "win-arm64" and not cgo
+              then: windows/run_dist_tests.ps1
         requirements:
           run:
             - if: unix and cgo
@@ -126,17 +129,23 @@ outputs:
             - if: target_platform == "win-arm64" and cgo
               then: ${{ compiler('c') }}
         script:
-          # telemetry counter files are written asynchronously into $HOME, which
-          # races with the test directory cleanup
-          - go telemetry off
-          - if: unix
-            then:
-              - ./${{ go_variant_str }}/test.sh
-              - test "$GOTOOLCHAIN" = "local"
-          - if: win
-            then:
-              - call ${{ go_variant_str }}\test.bat
-              - if not "%GOTOOLCHAIN%"=="local" exit /b 1
+          # Pass through public runner flags at execution time. Do not render
+          # publisher identity into tests that can later run on user machines.
+          secrets:
+            - GITHUB_ACTIONS
+            - RUNNER_ENVIRONMENT
+          content:
+            # telemetry counter files are written asynchronously into $HOME,
+            # which races with the test directory cleanup
+            - go telemetry off
+            - if: unix
+              then:
+                - ./${{ go_variant_str }}/test.sh
+                - test "$GOTOOLCHAIN" = "local"
+            - if: win
+              then:
+                - call ${{ go_variant_str }}\test.bat
+                - if not "%GOTOOLCHAIN%"=="local" exit /b 1
     about:
       homepage: https://go.dev/
       license: BSD-3-Clause
