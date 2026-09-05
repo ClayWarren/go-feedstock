@@ -49,6 +49,12 @@ jobs:
           "Source: $actual. One win-arm64 no-CGo job. Package uploads disabled." |
             Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
+      - name: Check PowerShell 5.1 regressions before downloading Go
+        shell: powershell
+        run: |
+          & .\ci\test_powershell51_types.ps1
+          & .\recipe\nocgo\test_verify_fips_integrity.ps1
+
       - name: Prove native PowerShell certificate lifetime
         shell: powershell
         env:
@@ -57,6 +63,7 @@ jobs:
           GOTOOLCHAIN: local
           GOENV: 'off'
         run: |
+          $ProgressPreference = 'SilentlyContinue'
           $bootstrap = Join-Path $env:RUNNER_TEMP ('go-nocgo-bootstrap-' + [guid]::NewGuid().ToString('N'))
           New-Item -ItemType Directory -Path $bootstrap | Out-Null
           $archive = Join-Path $bootstrap 'go1.27.1.windows-arm64.zip'
