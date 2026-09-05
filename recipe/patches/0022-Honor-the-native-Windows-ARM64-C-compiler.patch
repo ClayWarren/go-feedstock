@@ -1,0 +1,113 @@
+From dfcd79364dec61e24fb340f2390e4d17cf48b04d Mon Sep 17 00:00:00 2001
+From: ClayWarren <warren.clay@icloud.com>
+Date: Sat, 5 Sep 2026 15:28:00 -0500
+Subject: [PATCH] cmd/link: honor the native Windows ARM64 C compiler
+
+Direct go tool link invocations otherwise default to an unavailable gcc. Select the active CC with quoted argument support, or clang.exe when unset, only for Windows ARM64. Preserve explicit -extld and every other platform default. Add selector, quoting, and override tests.
+---
+ src/cmd/link/internal/ld/lib.go          | 31 +++++++++++++++++----
+ src/cmd/link/internal/ld/pe_msvc_test.go | 35 ++++++++++++++++++++++++
+ 2 files changed, 61 insertions(+), 5 deletions(-)
+
+diff --git a/src/cmd/link/internal/ld/lib.go b/src/cmd/link/internal/ld/lib.go
+index 7804fb1a..24e1254c 100644
+--- a/src/cmd/link/internal/ld/lib.go
++++ b/src/cmd/link/internal/ld/lib.go
+@@ -56,6 +56,7 @@ import (
+ 	"cmd/internal/goobj"
+ 	"cmd/internal/hash"
+ 	"cmd/internal/objabi"
++	"cmd/internal/quoted"
+ 	"cmd/internal/sys"
+ 	"cmd/link/internal/loadelf"
+ 	"cmd/link/internal/loader"
+@@ -491,16 +492,36 @@ func (ctxt *Link) extld() []string {
+ 		// Return the default external linker for the platform.
+ 		// This only matters when link tool is called directly without explicit -extld,
+ 		// go tool already passes the correct linker in other cases.
+-		switch buildcfg.GOOS {
+-		case "darwin", "freebsd", "openbsd":
+-			flagExtld = []string{"clang"}
+-		default:
+-			flagExtld = []string{"gcc"}
++		var err error
++		flagExtld, err = defaultExternalLinker(buildcfg.GOOS, buildcfg.GOARCH, os.Getenv("CC"))
++		if err != nil {
++			Exitf("invalid CC for the default external linker: %v", err)
+ 		}
+ 	}
+ 	return flagExtld
+ }
+ 
++func defaultExternalLinker(goos, goarch, cc string) ([]string, error) {
++	if goos == "windows" && goarch == "arm64" {
++		// Conda's native ARM64 C compiler is Clang, not MinGW GCC.
++		// Honor the active compiler when tests invoke go tool link directly.
++		args, err := quoted.Split(cc)
++		if err != nil {
++			return nil, err
++		}
++		if len(args) != 0 {
++			return args, nil
++		}
++		return []string{"clang.exe"}, nil
++	}
++	switch goos {
++	case "darwin", "freebsd", "openbsd":
++		return []string{"clang"}, nil
++	default:
++		return []string{"gcc"}, nil
++	}
++}
++
+ // findLibPathCmd uses cmd command to find gcc library libname.
+ // It returns library full path if found, or "none" if not found.
+ func (ctxt *Link) findLibPathCmd(cmd, libname string) string {
+diff --git a/src/cmd/link/internal/ld/pe_msvc_test.go b/src/cmd/link/internal/ld/pe_msvc_test.go
+index a1558878..8240068d 100644
+--- a/src/cmd/link/internal/ld/pe_msvc_test.go
++++ b/src/cmd/link/internal/ld/pe_msvc_test.go
+@@ -36,6 +36,41 @@ func TestMSVCDebugFlags(t *testing.T) {
+ 	}
+ }
+ 
++func TestDefaultExternalLinker(t *testing.T) {
++	for _, test := range []struct {
++		name, goos, goarch, cc string
++		want                   []string
++	}{
++		{"native ARM64 default", "windows", "arm64", "", []string{"clang.exe"}},
++		{"native ARM64 activation", "windows", "arm64", "clang.exe", []string{"clang.exe"}},
++		{"quoted compiler", "windows", "arm64", `"C:\Program Files\LLVM\bin\clang.exe" -fuse-ld=lld`, []string{`C:\Program Files\LLVM\bin\clang.exe`, "-fuse-ld=lld"}},
++		{"Windows x64 unchanged", "windows", "amd64", "clang.exe", []string{"gcc"}},
++		{"Windows x86 unchanged", "windows", "386", "clang.exe", []string{"gcc"}},
++		{"Linux unchanged", "linux", "arm64", "clang", []string{"gcc"}},
++		{"Darwin unchanged", "darwin", "arm64", "gcc", []string{"clang"}},
++		{"FreeBSD unchanged", "freebsd", "amd64", "gcc", []string{"clang"}},
++		{"OpenBSD unchanged", "openbsd", "amd64", "gcc", []string{"clang"}},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			got, err := defaultExternalLinker(test.goos, test.goarch, test.cc)
++			if err != nil || !slices.Equal(got, test.want) {
++				t.Fatalf("defaultExternalLinker() = %q, %v; want %q", got, err, test.want)
++			}
++		})
++	}
++	if _, err := defaultExternalLinker("windows", "arm64", `"unterminated`); err == nil {
++		t.Error("malformed CC did not return an error")
++	}
++
++	saved := flagExtld
++	defer func() { flagExtld = saved }()
++	want := []string{"explicit-linker", "explicit-argument"}
++	flagExtld = slices.Clone(want)
++	if got := new(Link).extld(); !slices.Equal(got, want) {
++		t.Fatalf("explicit -extld was replaced: %q", got)
++	}
++}
++
+ func mustHaveMSVC(t *testing.T) string {
+ 	t.Helper()
+ 	if runtime.GOOS != "windows" {
+-- 
+2.54.0 (Apple Git-156)

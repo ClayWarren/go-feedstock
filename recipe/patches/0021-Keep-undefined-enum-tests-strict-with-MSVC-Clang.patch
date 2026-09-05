@@ -1,0 +1,43 @@
+From 0940aecd1bae52def9ed1e9a3bb34e883a090fdf Mon Sep 17 00:00:00 2001
+From: ClayWarren <warren.clay@icloud.com>
+Date: Sat, 5 Sep 2026 15:26:57 -0500
+Subject: [PATCH] cmd/cgo: keep undefined-enum tests strict with MSVC Clang
+
+MSVC-target Clang accepts forward enum references as an extension. Turn that diagnostic into an error only inside the two negative fixtures, preserving their intended CGo error checks and the other compiler paths.
+---
+ src/cmd/cgo/internal/testerrors/testdata/issue11097a.go | 4 ++++
+ src/cmd/cgo/internal/testerrors/testdata/issue11097b.go | 4 ++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/src/cmd/cgo/internal/testerrors/testdata/issue11097a.go b/src/cmd/cgo/internal/testerrors/testdata/issue11097a.go
+index 028d10ce..260f48a8 100644
+--- a/src/cmd/cgo/internal/testerrors/testdata/issue11097a.go
++++ b/src/cmd/cgo/internal/testerrors/testdata/issue11097a.go
+@@ -5,6 +5,10 @@
+ package main
+ 
+ /*
++#if defined(_MSC_VER) && defined(__clang__)
++// This negative test requires standard C's rejection of incomplete enums.
++#pragma clang diagnostic error "-Wmicrosoft-enum-forward-reference"
++#endif
+ //enum test { foo, bar };
+ */
+ import "C"
+diff --git a/src/cmd/cgo/internal/testerrors/testdata/issue11097b.go b/src/cmd/cgo/internal/testerrors/testdata/issue11097b.go
+index b00f24fc..87c3b331 100644
+--- a/src/cmd/cgo/internal/testerrors/testdata/issue11097b.go
++++ b/src/cmd/cgo/internal/testerrors/testdata/issue11097b.go
+@@ -5,6 +5,10 @@
+ package main
+ 
+ /*
++#if defined(_MSC_VER) && defined(__clang__)
++// This negative test requires standard C's rejection of incomplete enums.
++#pragma clang diagnostic error "-Wmicrosoft-enum-forward-reference"
++#endif
+ //enum test { foo, bar };
+ */
+ import "C"
+-- 
+2.54.0 (Apple Git-156)

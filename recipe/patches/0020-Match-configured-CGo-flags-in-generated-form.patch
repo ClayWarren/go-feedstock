@@ -1,0 +1,113 @@
+From 2924f1ae37356c82fa8082d40eedca8b47ac9800 Mon Sep 17 00:00:00 2001
+From: ClayWarren <warren.clay@icloud.com>
+Date: Sat, 5 Sep 2026 15:26:57 -0500
+Subject: [PATCH] cmd/go: match configured CGo flags in their generated form
+
+Compare the trusted linker flags with the same escaped representation written by cgo and consumed by the compiler. Preserve validation of every remaining flag and bound the sequence search. Cover Windows paths, incomplete matches, and validation retention.
+---
+ src/cmd/go/internal/work/cgo_ldflags_test.go | 41 ++++++++++++++++++++
+ src/cmd/go/internal/work/exec.go             | 34 +++++++++-------
+ 2 files changed, 62 insertions(+), 13 deletions(-)
+ create mode 100644 src/cmd/go/internal/work/cgo_ldflags_test.go
+
+diff --git a/src/cmd/go/internal/work/cgo_ldflags_test.go b/src/cmd/go/internal/work/cgo_ldflags_test.go
+new file mode 100644
+index 00000000..9d40cd59
+--- /dev/null
++++ b/src/cmd/go/internal/work/cgo_ldflags_test.go
+@@ -0,0 +1,41 @@
++// Copyright 2026 The Go Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style
++// license that can be found in the LICENSE file.
++
++package work
++
++import (
++	"slices"
++	"testing"
++)
++
++func TestRemoveCgoLDFLAGS(t *testing.T) {
++	for _, test := range []struct {
++		name                 string
++		flags, trusted, want []string
++	}{
++		{"empty", nil, nil, nil},
++		{"no trusted flags", []string{"-lfixture"}, nil, []string{"-lfixture"}},
++		{"plain", []string{"-Ltrusted", "-lfixture"}, []string{"-Ltrusted"}, []string{"-lfixture"}},
++		{"after other flags", []string{"-lfixture", "-Ltrusted"}, []string{"-Ltrusted"}, []string{"-lfixture"}},
++		{"Windows path", []string{`-LC:\\Program Files\\conda\\lib`, "-lfixture"}, []string{`-LC:\Program Files\conda\lib`}, []string{"-lfixture"}},
++		{"escaped path in sequence", []string{"-nostdlib", `-LC:\\conda\\lib`, "-lfixture"}, []string{"-nostdlib", `-LC:\conda\lib`}, []string{"-lfixture"}},
++		{"shorter generated list", []string{"-Ltrusted"}, []string{"-Ltrusted", "-lfixture"}, []string{"-Ltrusted"}},
++		{"partial match at end", []string{"-lfixture", "-Ltrusted"}, []string{"-Ltrusted", "-lother"}, []string{"-lfixture", "-Ltrusted"}},
++		{"different path", []string{`-LC:\\other\\lib`}, []string{`-LC:\conda\lib`}, []string{`-LC:\\other\\lib`}},
++		{"remove only once", []string{"-Ltrusted", "-Ltrusted"}, []string{"-Ltrusted"}, []string{"-Ltrusted"}},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			if got := removeCgoLDFLAGS(slices.Clone(test.flags), test.trusted); !slices.Equal(got, test.want) {
++				t.Fatalf("removeCgoLDFLAGS() = %q, want %q", got, test.want)
++			}
++		})
++	}
++}
++
++func TestRemoveCgoLDFLAGSPreservesValidation(t *testing.T) {
++	flags := removeCgoLDFLAGS([]string{"-Ltrusted", "-nostdlib"}, []string{"-Ltrusted"})
++	if err := checkLinkerFlags("LDFLAGS", "go:cgo_ldflag", flags); err == nil {
++		t.Fatal("a flag not supplied to the cgo action escaped validation")
++	}
++}
+diff --git a/src/cmd/go/internal/work/exec.go b/src/cmd/go/internal/work/exec.go
+index 28fe4904..86f6b8e9 100644
+--- a/src/cmd/go/internal/work/exec.go
++++ b/src/cmd/go/internal/work/exec.go
+@@ -3256,19 +3256,8 @@ func (b *Builder) processCgoOutputs(a *Action, runCgoProvider *runCgoProvider, c
+ 			}
+ 		}
+ 
+-		// We expect to find the contents of cgoLDFLAGS used when running the CGO action in flags.
+-		if len(runCgoProvider.LDFLAGS) > 0 {
+-		outer:
+-			for i := range flags {
+-				for j, f := range runCgoProvider.LDFLAGS {
+-					if f != flags[i+j] {
+-						continue outer
+-					}
+-				}
+-				flags = append(flags[:i], flags[i+len(runCgoProvider.LDFLAGS):]...)
+-				break
+-			}
+-		}
++		// Exclude only the exact flags already passed to the cgo action.
++		flags = removeCgoLDFLAGS(flags, runCgoProvider.LDFLAGS)
+ 
+ 		if err := checkLinkerFlags("LDFLAGS", "go:cgo_ldflag", flags); err != nil {
+ 			return nil, nil, err
+@@ -3278,6 +3267,25 @@ func (b *Builder) processCgoOutputs(a *Action, runCgoProvider *runCgoProvider, c
+ 	return outGo, outObj, nil
+ }
+ 
++func removeCgoLDFLAGS(flags, ldflags []string) []string {
++	if len(ldflags) == 0 {
++		return flags
++	}
++	// cmd/cgo writes each flag with %q. The compiler and the backstop above
++	// strip the quotes without interpreting escapes, so compare the trusted
++	// flags in that same representation. Windows paths contain backslashes.
++	expected := make([]string, len(ldflags))
++	for i, flag := range ldflags {
++		expected[i] = strings.Trim(strconv.Quote(flag), `"`)
++	}
++	for i := 0; i+len(expected) <= len(flags); i++ {
++		if slices.Equal(flags[i:i+len(expected)], expected) {
++			return slices.Delete(flags, i, i+len(expected))
++		}
++	}
++	return flags
++}
++
+ // flagsNotCompatibleWithInternalLinking scans the list of cgo
+ // compiler flags (C/C++/Fortran) looking for flags that might cause
+ // problems if the build in question uses internal linking. The
+-- 
+2.54.0 (Apple Git-156)

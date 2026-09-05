@@ -1,0 +1,111 @@
+From 73152033a0358147ac456ab8e22787d0d1ee9d8d Mon Sep 17 00:00:00 2001
+From: ClayWarren <warren.clay@icloud.com>
+Date: Sat, 5 Sep 2026 15:21:48 -0500
+Subject: [PATCH] cmd/link: initialize Go DLLs through the MSVC CRT
+
+Use .CRT$XCU for MSVC-target c-shared initializers; the MSVC runtime does not process MinGW's .ctors section. Retain the existing section for other build modes and MinGW. Add a native regression test for the initializer and its relocation.
+---
+ src/cmd/link/internal/ld/pe.go           | 11 ++++--
+ src/cmd/link/internal/ld/pe_msvc_test.go | 46 +++++++++++++++++++++++-
+ 2 files changed, 54 insertions(+), 3 deletions(-)
+
+diff --git a/src/cmd/link/internal/ld/pe.go b/src/cmd/link/internal/ld/pe.go
+index 8376ddef..ca7e7a4b 100644
+--- a/src/cmd/link/internal/ld/pe.go
++++ b/src/cmd/link/internal/ld/pe.go
+@@ -662,7 +662,7 @@ func (f *peFile) addSEH(ctxt *Link) {
+ 	}
+ }
+ 
+-// addInitArray adds .ctors COFF section to the file f.
++// addInitArray adds the runtime initializer's COFF section to the file f.
+ func (f *peFile) addInitArray(ctxt *Link) *peSection {
+ 	// The size below was determined by the specification for array relocations,
+ 	// and by observing what GCC writes here. If the initarray section grows to
+@@ -678,7 +678,14 @@ func (f *peFile) addInitArray(ctxt *Link) *peSection {
+ 		size = 4
+ 		alignment = IMAGE_SCN_ALIGN_4BYTES
+ 	}
+-	sect := f.addSection(".ctors", size, size)
++	name := ".ctors"
++	if ctxt.BuildMode == BuildModeCShared && ctxt.isMSVC() {
++		// The MSVC CRT calls initializers between .CRT$XCA and .CRT$XCZ.
++		// It does not process MinGW's .ctors section, leaving exported Go
++		// functions waiting forever for the runtime to initialize.
++		name = ".CRT$XCU"
++	}
++	sect := f.addSection(name, size, size)
+ 	sect.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | alignment
+ 	sect.sizeOfRawData = uint32(size)
+ 	ctxt.Out.SeekSet(int64(sect.pointerToRawData))
+diff --git a/src/cmd/link/internal/ld/pe_msvc_test.go b/src/cmd/link/internal/ld/pe_msvc_test.go
+index 550b1dfe..a1558878 100644
+--- a/src/cmd/link/internal/ld/pe_msvc_test.go
++++ b/src/cmd/link/internal/ld/pe_msvc_test.go
+@@ -36,7 +36,8 @@ func TestMSVCDebugFlags(t *testing.T) {
+ 	}
+ }
+ 
+-func TestWindowsMSVCExternalDebugInfo(t *testing.T) {
++func mustHaveMSVC(t *testing.T) string {
++	t.Helper()
+ 	if runtime.GOOS != "windows" {
+ 		t.Skip("Windows PE executable test")
+ 	}
+@@ -58,7 +59,11 @@ func TestWindowsMSVCExternalDebugInfo(t *testing.T) {
+ 	if !bytes.Contains(version, []byte("-msvc")) {
+ 		t.Skip("requires MSVC-target Clang")
+ 	}
++	return goTool
++}
+ 
++func TestWindowsMSVCExternalDebugInfo(t *testing.T) {
++	goTool := mustHaveMSVC(t)
+ 	dir := t.TempDir()
+ 	src := filepath.Join(dir, "main.go")
+ 	if err := os.WriteFile(src, []byte(`package main
+@@ -111,3 +116,42 @@ func main() { if C.answer() != 42 { panic("incorrect C result") } }
+ 		})
+ 	}
+ }
++
++func TestWindowsMSVCSharedInitializer(t *testing.T) {
++	goTool := mustHaveMSVC(t)
++	testenv.MustHaveBuildMode(t, "c-shared")
++	dir := t.TempDir()
++	src := filepath.Join(dir, "main.go")
++	if err := os.WriteFile(src, []byte(`package main
++import "C"
++//export Answer
++func Answer() int { return 42 }
++func main() {}
++`), 0666); err != nil {
++		t.Fatal(err)
++	}
++	linktmp := filepath.Join(dir, "linktmp")
++	if err := os.Mkdir(linktmp, 0777); err != nil {
++		t.Fatal(err)
++	}
++	dll := filepath.Join(dir, "test.dll")
++	out, err := testenv.Command(t, goTool, "build", "-buildmode=c-shared", "-ldflags=-tmpdir="+linktmp, "-o", dll, src).CombinedOutput()
++	if err != nil {
++		t.Fatalf("building shared library: %v\n%s", err, out)
++	}
++	f, err := pe.Open(filepath.Join(linktmp, "go.o"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer f.Close()
++	if f.Section(".ctors") != nil {
++		t.Error("MSVC shared library still uses a MinGW initializer")
++	}
++	init := f.Section(".CRT$XCU")
++	if init == nil {
++		t.Fatal("MSVC shared library has no CRT initializer")
++	}
++	if len(init.Relocs) != 1 {
++		t.Errorf("CRT initializer has %d relocations, want 1", len(init.Relocs))
++	}
++}
+-- 
+2.54.0 (Apple Git-156)

@@ -30,6 +30,11 @@ source:
       - patches/0015-Require-CGo-for-FIPS-external-link-tests.patch
       - patches/0016-Select-external-linking-for-unsupported-ARM64-COFF.patch
       - patches/0017-Fix-CGo-enum-fixture-reference.patch
+      - patches/0018-Preserve-MSVC-CGo-debug-metadata.patch
+      - patches/0019-Initialize-Go-DLLs-through-the-MSVC-CRT.patch
+      - patches/0020-Match-configured-CGo-flags-in-generated-form.patch
+      - patches/0021-Keep-undefined-enum-tests-strict-with-MSVC-Clang.patch
+      - patches/0022-Honor-the-native-Windows-ARM64-C-compiler.patch
 
   # Update this with a release from https://go.dev/dl/
   - if: build_platform == "linux-64"
