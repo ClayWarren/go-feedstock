@@ -26,6 +26,13 @@ The no-CGo package tests preserve the authoritative dist suite and add
 positive FIPS inventory and actual integrity-test evidence. Existing
 `os`, `cmd/go`, and `cmd/gofmt` diagnostics remain separately logged.
 
+Go 1.27 honors `SSL_CERT_FILE` and `SSL_CERT_DIR` on Windows, bypassing the
+platform verifier when either is set. Pixi exports these for its own CA
+bundle, so the native test wrapper temporarily clears both during the focused
+certificate check and authoritative suite, then restores their exact values.
+This is test-process isolation, not an activation or Go-default change.
+The suite's upstream certificate-override tests remain enabled.
+
 Run the portable mocked lifetime tests without accessing certificate stores:
 
 ```powershell

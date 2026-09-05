@@ -152,19 +152,67 @@ Write-Host 'PASS compiler LIB isolation and exact restoration after success/fail
 
 $script:NativeCalls = [Collections.Generic.List[string]]::new()
 $script:FocusedExit = 0
+$script:SuiteExit = 23
+$script:ThrowOnCall = 0
 function Fake-Go {
+    foreach ($name in @('SSL_CERT_FILE', 'SSL_CERT_DIR')) {
+        Assert-Equal ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($name, 'Process'))) $true "$name platform-test isolation"
+    }
+    Assert-Equal $env:GODEBUG 'x509sslcertoverrideplatform=1' 'upstream override behavior remains enabled'
     $script:NativeCalls.Add(($args -join '|'))
+    if ($script:NativeCalls.Count -eq $script:ThrowOnCall) { throw 'simulated Go launch failure' }
     if ($args[0] -ceq 'test') { $global:LASTEXITCODE = $script:FocusedExit }
-    else { $global:LASTEXITCODE = 23 }
+    else { $global:LASTEXITCODE = $script:SuiteExit }
 }
-Assert-Equal (Invoke-AuthoritativeGoTests 'Fake-Go') 23 'suite failure preserved'
-Assert-Equal $script:NativeCalls[0] 'test|-count=1|-v|-run=^Test(Go|System)Verify$/^SHA-384$|crypto/x509' 'focused arguments'
-Assert-Equal $script:NativeCalls[1] 'tool|dist|test|-k|-v|-no-rebuild|-run=!^(os|cmd/go|cmd/gofmt)$' 'authoritative arguments'
-$script:NativeCalls.Clear()
-$script:FocusedExit = 29
-Assert-Equal (Invoke-AuthoritativeGoTests 'Fake-Go') 29 'focused failure preserved'
-Assert-Equal $script:NativeCalls.Count 1 'focused failure stops before suite'
-Write-Host 'PASS fixed native commands and failure propagation'
+function Test-CertificateEnvironmentScope {
+    param([string] $CertFile, [string] $CertDirectory, [int] $FocusedExit, [int] $SuiteExit, [int] $ThrowOnCall)
+    $original = @{}
+    foreach ($name in @('SSL_CERT_FILE', 'SSL_CERT_DIR', 'GODEBUG')) {
+        $original[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    }
+    try {
+        [Environment]::SetEnvironmentVariable('SSL_CERT_FILE', $CertFile, 'Process')
+        [Environment]::SetEnvironmentVariable('SSL_CERT_DIR', $CertDirectory, 'Process')
+        [Environment]::SetEnvironmentVariable('GODEBUG', 'x509sslcertoverrideplatform=1', 'Process')
+        $expected = @{}
+        foreach ($name in $original.Keys) { $expected[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+        $script:NativeCalls.Clear()
+        $script:FocusedExit = $FocusedExit
+        $script:SuiteExit = $SuiteExit
+        $script:ThrowOnCall = $ThrowOnCall
+        $thrown = $false
+        try { $status = Invoke-AuthoritativeGoTests 'Fake-Go' } catch {
+            if ($_.Exception.Message -cne 'simulated Go launch failure') { throw }
+            $thrown = $true
+        }
+        Assert-Equal $thrown ($ThrowOnCall -gt 0) 'launch exceptions preserved'
+        $expectedCalls = if ($FocusedExit -ne 0 -or $ThrowOnCall -eq 1) { 1 } else { 2 }
+        Assert-Equal $script:NativeCalls.Count $expectedCalls 'focused failure stops before suite'
+        Assert-Equal $script:NativeCalls[0] 'test|-count=1|-v|-run=^Test(Go|System)Verify$/^SHA-384$|crypto/x509' 'focused arguments'
+        if ($expectedCalls -eq 2) {
+            Assert-Equal $script:NativeCalls[1] 'tool|dist|test|-k|-v|-no-rebuild|-run=!^(os|cmd/go|cmd/gofmt)$' 'authoritative arguments'
+        }
+        if (-not $thrown) {
+            $expectedStatus = if ($FocusedExit -ne 0) { $FocusedExit } else { $SuiteExit }
+            Assert-Equal $status $expectedStatus 'Go exit code preserved'
+        }
+        foreach ($name in $expected.Keys) {
+            Assert-Equal ([Environment]::GetEnvironmentVariable($name, 'Process')) $expected[$name] "$name restored unchanged"
+        }
+    } finally {
+        foreach ($name in $original.Keys) { [Environment]::SetEnvironmentVariable($name, $original[$name], 'Process') }
+    }
+}
+foreach ($certFile in @($null, 'C:\pixi build\Library\ssl\cacert.pem')) {
+    foreach ($certDirectory in @($null, 'C:\pixi build\Library\ssl\certs;C:\other certs')) {
+        Test-CertificateEnvironmentScope $certFile $certDirectory 0 0 0
+        Test-CertificateEnvironmentScope $certFile $certDirectory 0 23 0
+        Test-CertificateEnvironmentScope $certFile $certDirectory 29 0 0
+        Test-CertificateEnvironmentScope $certFile $certDirectory 0 0 1
+        Test-CertificateEnvironmentScope $certFile $certDirectory 0 0 2
+    }
+}
+Write-Host 'PASS 20 certificate-environment cases: fixed commands, exact restoration, and failure propagation'
 
 # Check the entry point without executing it. All platform guards must throw
 # before the first certificate store is even constructed.

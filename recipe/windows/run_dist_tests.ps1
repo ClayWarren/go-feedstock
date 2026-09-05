@@ -183,11 +183,31 @@ function Invoke-GoTestsWithRoot {
 
 function Invoke-AuthoritativeGoTests {
     param([string] $GoExecutable)
-    & $GoExecutable test -count=1 -v '-run=^Test(Go|System)Verify$/^SHA-384$' crypto/x509 | Out-Host
-    $focusedStatus = $LASTEXITCODE
-    if ($focusedStatus -ne 0) { return $focusedStatus }
-    & $GoExecutable tool dist test -k -v -no-rebuild '-run=!^(os|cmd/go|cmd/gofmt)$' | Out-Host
-    return $LASTEXITCODE
+    # Go 1.27 uses an on-disk pool instead of Windows certificate APIs when
+    # either SSL_CERT_* override is set (https://go.dev/doc/go1.27#crypto/x509).
+    # These native stdlib tests require platform roots. Isolate the inherited
+    # build-tool overrides for both commands, then restore them on every exit.
+    # Upstream override tests still set their own variables; GODEBUG is unchanged.
+    $certificateOverrides = @{}
+    foreach ($name in @('SSL_CERT_FILE', 'SSL_CERT_DIR')) {
+        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if (-not [string]::IsNullOrEmpty($value)) { $certificateOverrides[$name] = $value }
+    }
+    try {
+        foreach ($name in $certificateOverrides.Keys) {
+            Write-Host "Isolating inherited $name for the native Windows certificate tests."
+            [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+        }
+        & $GoExecutable test -count=1 -v '-run=^Test(Go|System)Verify$/^SHA-384$' crypto/x509 | Out-Host
+        $focusedStatus = $LASTEXITCODE
+        if ($focusedStatus -ne 0) { return $focusedStatus }
+        & $GoExecutable tool dist test -k -v -no-rebuild '-run=!^(os|cmd/go|cmd/gofmt)$' | Out-Host
+        return $LASTEXITCODE
+    } finally {
+        foreach ($name in $certificateOverrides.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $certificateOverrides[$name], 'Process')
+        }
+    }
 }
 
 $certificate = $null
