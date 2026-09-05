@@ -138,6 +138,8 @@ go test -list=^^TestRemoveCgoLDFLAGS cmd/go/internal/work > cgo_flag_tests.txt
 if errorlevel 1 exit /b 1
 go test -list=^^TestReportsTypeErrors$ cmd/cgo/internal/testerrors > cgo_error_tests.txt
 if errorlevel 1 exit /b 1
+go test -list=^^TestMSVCVariableAddressGeneration$ cmd/cgo > cgo_variable_tests.txt
+if errorlevel 1 exit /b 1
 go test -list=^^TestIssue59213$ runtime > cgo_runtime_tests.txt
 if errorlevel 1 exit /b 1
 go test -list=. internal/testenv cmd/dist > cgo_capability_tests.txt
@@ -148,6 +150,7 @@ powershell -NoLogo -NoProfile -NonInteractive -Command ^
   "$linkTests = @(Get-Content -LiteralPath 'pe_link_tests.txt');" ^
   "$flagTests = @(Get-Content -LiteralPath 'cgo_flag_tests.txt');" ^
   "$errorTests = @(Get-Content -LiteralPath 'cgo_error_tests.txt');" ^
+  "$variableTests = @(Get-Content -LiteralPath 'cgo_variable_tests.txt');" ^
   "$runtimeTests = @(Get-Content -LiteralPath 'cgo_runtime_tests.txt');" ^
   "$capabilityTests = @(Get-Content -LiteralPath 'cgo_capability_tests.txt');" ^
   "foreach ($name in @('TestExternalLinkReason', 'TestExternalLinkReasonStaticData')) {" ^
@@ -163,6 +166,7 @@ powershell -NoLogo -NoProfile -NonInteractive -Command ^
   "  if ($capabilityTests -cnotcontains $name) { $capabilityTests; throw ('Missing CGo capability test: ' + $name) }" ^
   "};" ^
   "if ($errorTests -cnotcontains 'TestReportsTypeErrors') { $errorTests; throw 'Missing CGo type-error tests' };" ^
+  "if ($variableTests -cnotcontains 'TestMSVCVariableAddressGeneration') { $variableTests; throw 'Missing CGo variable-address tests' };" ^
   "if ($runtimeTests -cnotcontains 'TestIssue59213') { $runtimeTests; throw 'Missing Go DLL runtime test' }"
 if errorlevel 1 exit /b 1
 rem Collect independent focused failures, preserving a fatal result after
@@ -186,6 +190,8 @@ if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 -v -run=^^TestRemoveCgoLDFLAGS cmd/go/internal/work
 if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 -v -run=^^TestReportsTypeErrors$ cmd/cgo/internal/testerrors
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
+go test -count=1 -v -run=^^TestMSVCVariableAddressGeneration$ cmd/cgo
 if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 cmd/cgo/internal/testso cmd/cgo/internal/testlife cmd/cgo/internal/teststdio
 if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"

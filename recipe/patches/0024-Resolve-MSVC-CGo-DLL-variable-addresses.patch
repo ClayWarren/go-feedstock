@@ -1,0 +1,253 @@
+From 32bca74fcff89c6f7e4ee5c2e5a840888fcba756 Mon Sep 17 00:00:00 2001
+From: ClayWarren <warren.clay@icloud.com>
+Date: Sat, 5 Sep 2026 16:55:32 -0500
+Subject: [PATCH] cmd/cgo: resolve MSVC data imports through C addresses
+
+MSVC import libraries expose DLL variables through the import address table rather than direct data symbols. Resolve variable addresses through generated C wrappers during Go initialization, then preserve ordinary reads, writes, and address-taking without repeated C calls.
+
+Keep other targets, gccgo, godefs, macros, and function-address bindings unchanged. Add generator coverage and extend the shared-variable consumer with initialization, mutation, address identity, and array checks.
+---
+ src/cmd/cgo/gcc.go                            | 32 ++++++++++
+ .../internal/testso/testdata/sovar/cgoso.go   | 25 ++++++++
+ .../internal/testso/testdata/sovar/cgoso_c.c  |  2 +
+ .../internal/testso/testdata/sovar/cgoso_c.h  |  2 +
+ src/cmd/cgo/main.go                           |  2 +
+ src/cmd/cgo/msvc_vars_test.go                 | 64 +++++++++++++++++++
+ src/cmd/cgo/out.go                            |  8 ++-
+ 7 files changed, 133 insertions(+), 2 deletions(-)
+ create mode 100644 src/cmd/cgo/msvc_vars_test.go
+
+diff --git a/src/cmd/cgo/gcc.go b/src/cmd/cgo/gcc.go
+index b8b8d6ba..609c30e9 100644
+--- a/src/cmd/cgo/gcc.go
++++ b/src/cmd/cgo/gcc.go
+@@ -276,6 +276,9 @@ func (f *File) loadDefines(gccOptions []string) bool {
+ 		if key == "__clang__" {
+ 			gccIsClang = true
+ 		}
++		if key == "_MSC_VER" {
++			f.GccIsMSVC = true
++		}
+ 
+ 		if n := f.Name[key]; n != nil {
+ 			if *debugDefine {
+@@ -798,6 +801,35 @@ func (p *Package) prepareNames(f *File) {
+ 			typedef[n.Mangle] = n.Type
+ 		}
+ 	}
++	if goos == "windows" && f.GccIsMSVC && !*gccgo && !*godefs {
++		// MSVC import libraries expose data through the import address
++		// table, not a directly linkable data symbol. Let the C compiler
++		// resolve addresses using each variable's declaration, including
++		// dllimport. Cache the address during Go package initialization so
++		// subsequent reads, writes, and address-taking need no C call.
++		for _, key := range nameKeys(f.Name) {
++			n := f.Name[key]
++			if n.Kind != "var" {
++				continue
++			}
++			addr := &Name{
++				Go:     n.Go,
++				Mangle: "_Cvaraddr_" + n.Go,
++				C:      "(void *)&(" + n.C + ")",
++				Kind:   "macro",
++				FuncType: &FuncType{
++					Result: &Type{Size: p.PtrSize, Align: p.PtrSize, C: c("void*"), Go: ast.NewIdent("unsafe.Pointer")},
++					Go: &ast.FuncType{
++						Results: &ast.FieldList{List: []*ast.Field{{Type: ast.NewIdent("unsafe.Pointer")}}},
++					},
++				},
++			}
++			n.VarAddr = addr.Mangle
++			// A space cannot occur in a source C identifier, so this key
++			// cannot collide with a name referred to by the user's Go code.
++			f.Name["varaddr "+n.Go] = addr
++		}
++	}
+ }
+ 
+ // mangleName does name mangling to translate names
+diff --git a/src/cmd/cgo/internal/testso/testdata/sovar/cgoso.go b/src/cmd/cgo/internal/testso/testdata/sovar/cgoso.go
+index d9deb556..94422a57 100644
+--- a/src/cmd/cgo/internal/testso/testdata/sovar/cgoso.go
++++ b/src/cmd/cgo/internal/testso/testdata/sovar/cgoso.go
+@@ -26,11 +26,18 @@ package cgosotest
+ const char* getVar() {
+ 	    return exported_var;
+ }
++
++void setCounter(int value) { exported_counter = value; }
++int getCounter(void) { return exported_counter; }
++int *counterAddress(void) { return &exported_counter; }
++int getArrayElement(void) { return exported_array[1]; }
+ */
+ import "C"
+ 
+ import "fmt"
+ 
++var initialCounter = C.exported_counter
++
+ func Test() {
+ 	const want = "Hello world"
+ 	got := C.GoString(C.getVar())
+@@ -41,4 +48,22 @@ func Test() {
+ 	if got != want {
+ 		panic(fmt.Sprintf("testExportedVar: got %q, but want %q", got, want))
+ 	}
++	if initialCounter != 42 || C.exported_counter != 42 {
++		panic("imported variable was not available during Go initialization")
++	}
++	C.setCounter(73)
++	if C.exported_counter != 73 {
++		panic("Go read did not observe a C write")
++	}
++	C.exported_counter = 99
++	if C.getCounter() != 99 || &C.exported_counter != C.counterAddress() {
++		panic("Go write or address does not refer to the imported variable")
++	}
++	if C.exported_array[1] != 5 {
++		panic("incorrect imported array element")
++	}
++	C.exported_array[1] = 13
++	if C.getArrayElement() != 13 {
++		panic("Go array write did not reach the imported array")
++	}
+ }
+diff --git a/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.c b/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.c
+index 3ed18c27..c2f41dc1 100644
+--- a/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.c
++++ b/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.c
+@@ -7,3 +7,5 @@
+ #include "cgoso_c.h"
+ 
+ const char *exported_var = "Hello world";
++int exported_counter = 42;
++int exported_array[3] = {3, 5, 8};
+diff --git a/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.h b/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.h
+index cd26452d..bce10961 100644
+--- a/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.h
++++ b/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.h
+@@ -15,3 +15,5 @@
+ #endif
+ 
+ VAR const char *exported_var;
++VAR int exported_counter;
++VAR int exported_array[3];
+diff --git a/src/cmd/cgo/main.go b/src/cmd/cgo/main.go
+index 452840a4..e885ace5 100644
+--- a/src/cmd/cgo/main.go
++++ b/src/cmd/cgo/main.go
+@@ -75,6 +75,7 @@ type File struct {
+ 	NoCallbacks map[string]bool     // C function names with #cgo nocallback directive
+ 	NoEscapes   map[string]bool     // C function names with #cgo noescape directive
+ 	Edit        *edit.Buffer
++	GccIsMSVC   bool // the effective C target uses the MSVC ABI
+ 
+ 	debugs []*debug // debug data from iterations of gccDebug. Initialized by File.loadDebug.
+ }
+@@ -124,6 +125,7 @@ type Name struct {
+ 	FuncType *FuncType
+ 	AddError bool
+ 	Const    string // constant definition
++	VarAddr  string // generated C wrapper that resolves this variable's address
+ }
+ 
+ // IsVar reports whether Kind is either "var" or "fpvar"
+diff --git a/src/cmd/cgo/msvc_vars_test.go b/src/cmd/cgo/msvc_vars_test.go
+new file mode 100644
+index 00000000..e0d4ffee
+--- /dev/null
++++ b/src/cmd/cgo/msvc_vars_test.go
+@@ -0,0 +1,64 @@
++// Copyright 2026 The Go Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style
++// license that can be found in the LICENSE file.
++
++package main
++
++import (
++	"go/ast"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++func TestMSVCVariableAddressGeneration(t *testing.T) {
++	savedOS, savedArch, savedDir := goos, goarch, *objDir
++	savedGccgo, savedGodefs := *gccgo, *godefs
++	t.Cleanup(func() {
++		goos, goarch, *objDir = savedOS, savedArch, savedDir
++		*gccgo, *godefs = savedGccgo, savedGodefs
++	})
++	*gccgo, *godefs = false, false
++	for _, test := range []struct {
++		name, os, arch string
++		msvc, wrapper  bool
++	}{
++		{"MSVC ARM64", "windows", "arm64", true, true},
++		{"MSVC x64", "windows", "amd64", true, true},
++		{"MinGW ARM64", "windows", "arm64", false, false},
++		{"Darwin", "darwin", "arm64", false, false},
++		{"MSVC macro outside Windows", "linux", "arm64", true, false},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			goos, goarch, *objDir = test.os, test.arch, t.TempDir()
++			n := &Name{Go: "value", C: "value", Kind: "var", Type: &Type{Size: 4, Align: 4, C: c("int"), Go: ast.NewIdent("int32")}}
++			f := &File{GccIsMSVC: test.msvc, Name: map[string]*Name{"value": n}}
++			p := &Package{PackageName: "test", PtrSize: 8, IntSize: 8, Written: make(map[string]bool)}
++			p.prepareNames(f)
++			p.Name = f.Name
++			p.writeDefs()
++			generated, err := os.ReadFile(filepath.Join(*objDir, "_cgo_gotypes.go"))
++			if err != nil {
++				t.Fatal(err)
++			}
++			text := string(generated)
++			if test.wrapper {
++				if !strings.Contains(text, "var _Cvar_value *int32 = (*int32)(_Cvaraddr_value())") {
++					t.Fatalf("MSVC variable is not initialized through its C address wrapper:\n%s", text)
++				}
++				if strings.Contains(text, "//go:cgo_import_static value\n") || strings.Contains(text, "unsafe.Pointer(&__cgo_value)") {
++					t.Fatalf("MSVC variable still requires a direct data import:\n%s", text)
++				}
++				addr := f.Name["varaddr value"]
++				if addr == nil || addr.C != "(void *)&(value)" || addr.FuncType.Result.C.String() != "void*" {
++					t.Fatalf("incorrect C address expression: %#v", addr)
++				}
++			} else {
++				if strings.Contains(text, "_Cvaraddr_") || !strings.Contains(text, "unsafe.Pointer(&__cgo_value)") {
++					t.Fatalf("non-MSVC variable binding changed:\n%s", text)
++				}
++			}
++		})
++	}
++}
+diff --git a/src/cmd/cgo/out.go b/src/cmd/cgo/out.go
+index 151000f5..3029edc3 100644
+--- a/src/cmd/cgo/out.go
++++ b/src/cmd/cgo/out.go
+@@ -176,7 +176,7 @@ func (p *Package) writeDefs() {
+ 			continue
+ 		}
+ 
+-		if !cVars[n.C] {
++		if n.VarAddr == "" && !cVars[n.C] {
+ 			if *gccgo {
+ 				fmt.Fprintf(fc, "extern byte *%s;\n", n.C)
+ 			} else {
+@@ -218,7 +218,11 @@ func (p *Package) writeDefs() {
+ 		if !*gccgo {
+ 			fmt.Fprintf(fgo2, " = (")
+ 			conf.Fprint(fgo2, fset, node)
+-			fmt.Fprintf(fgo2, ")(unsafe.Pointer(&__cgo_%s))", n.C)
++			if n.VarAddr != "" {
++				fmt.Fprintf(fgo2, ")(%s())", n.VarAddr)
++			} else {
++				fmt.Fprintf(fgo2, ")(unsafe.Pointer(&__cgo_%s))", n.C)
++			}
+ 		}
+ 		fmt.Fprintf(fgo2, "\n")
+ 	}
+-- 
+2.54.0 (Apple Git-156)
