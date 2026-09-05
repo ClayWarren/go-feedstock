@@ -28,6 +28,7 @@ source:
       - patches/0013-Handle-no-duplicates-PE-COMDAT-sections.patch
       - patches/0014-Support-MSVC-target-CGo-shared-library-tests.patch
       - patches/0015-Require-CGo-for-FIPS-external-link-tests.patch
+      - patches/0016-Select-external-linking-for-unsupported-ARM64-COFF.patch
 
   # Update this with a release from https://go.dev/dl/
   - if: build_platform == "linux-64"
@@ -118,7 +119,7 @@ outputs:
       - files:
           recipe:
             - ${{ go_variant_str }}/
-            - if: target_platform == "win-arm64" and not cgo
+            - if: target_platform == "win-arm64"
               then: windows/run_dist_tests.ps1
         requirements:
           run:

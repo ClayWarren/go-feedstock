@@ -1,0 +1,539 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ClayWarren <warren.clay@icloud.com>
+Date: Fri, 4 Sep 2026 00:00:00 +0000
+Subject: [PATCH] cmd/link: use external linking for unsupported ARM64 COFF
+
+The ARM64 internal PE loader cannot select associative COMDAT children or
+process ARM64 exception-handling data. Inspect host objects before choosing
+link mode so ordinary cgo builds use the external linker when needed,
+without partially loading these sections or dropping unwind information.
+
+Keep supported leaf and resource inputs eligible for internal linking and
+leave other architectures unchanged. Bound reads to the archive member,
+preserve its reader state, and let the external linker validate COFF forms
+that debug/pe cannot parse. Explicit external linking remains opaque;
+explicit internal linking and late-only unsupported archive members fail
+with a causal diagnostic instead of partially creating loader state.
+
+Tests cover COMDAT strategies, initialized and BSS static data leaders,
+long section names, invalid section definitions, packed/full/ordered unwind,
+empty sections, resources, AMD64, archive offsets, short inputs, automatic
+selection, and explicit internal-link rejection through flag and environment.
+
+---
+diff --git a/src/cmd/link/internal/ld/config.go b/src/cmd/link/internal/ld/config.go
+index acbebf28..99492853 100644
+--- a/src/cmd/link/internal/ld/config.go
++++ b/src/cmd/link/internal/ld/config.go
+@@ -166,6 +166,9 @@ func mustLinkExternal(ctxt *Link) (res bool, reason string) {
+ 	if unknownObjFormat {
+ 		return true, "some input objects have an unrecognized file format"
+ 	}
++	if unsupportedPEObject != "" {
++		return true, unsupportedPEObject
++	}
+ 
+ 	if len(dynimportfail) > 0 {
+ 		// This error means that we were unable to generate
+diff --git a/src/cmd/link/internal/ld/lib.go b/src/cmd/link/internal/ld/lib.go
+index 2238c6c9..b2042c30 100644
+--- a/src/cmd/link/internal/ld/lib.go
++++ b/src/cmd/link/internal/ld/lib.go
+@@ -358,6 +358,10 @@ var (
+ 	// format we don't recognize.
+ 	unknownObjFormat = false
+ 
++	// unsupportedPEObject records the first ARM64 COFF input that needs
++	// external selection or unwind handling, before any host symbols load.
++	unsupportedPEObject string
++
+ 	theline string
+ )
+ 
+@@ -2468,7 +2472,29 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
+ 		0x6486, // amd64
+ 		0xc401, // arm
+ 		0x64aa: // arm64
++		var peLinkReason string
++		if ctxt.Arch.Family == sys.ARM64 && ctxt.LinkMode != LinkExternal {
++			reason, err := loadpe.ExternalLinkReason(f, length)
++			if err != nil {
++				// The external linker can accept COFF variants that debug/pe
++				// does not parse (including short, sectionless objects).
++				// Leave validation to that linker instead of rejecting inputs
++				// which the internal PE loader cannot consume.
++				reason = fmt.Sprintf("ARM64 COFF input unsupported by internal linker: %v", err)
++			}
++			peLinkReason = reason
++			if reason != "" && unsupportedPEObject == "" {
++				unsupportedPEObject = fmt.Sprintf("%s: %s", pn, reason)
++			}
++		}
+ 		ldpe := func(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
++			if peLinkReason != "" {
++				// Compiler-runtime archive members can be discovered after
++				// determineLinkMode. Do not partially load unsupported inputs
++				// or pretend the already chosen link mode can still change.
++				Errorf("%s: external linking required: %s", pn, peLinkReason)
++				return
++			}
+ 			ls, err := loadpe.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn)
+ 			if err != nil {
+ 				Errorf("%v", err)
+diff --git a/src/cmd/link/internal/loadpe/linkmode.go b/src/cmd/link/internal/loadpe/linkmode.go
+new file mode 100644
+--- /dev/null
++++ b/src/cmd/link/internal/loadpe/linkmode.go
+@@ -0,0 +1,77 @@
++// Copyright 2026 The Go Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style
++// license that can be found in the LICENSE file.
++
++package loadpe
++
++import (
++	"cmd/internal/bio"
++	"debug/pe"
++	"fmt"
++	"io"
++	"strings"
++)
++
++// ExternalLinkReason reports ARM64 COFF features that require an external
++// linker. It must run before Load, which mutates the symbol and COMDAT state.
++// Reads are bounded to the archive member and do not change input's offset.
++func ExternalLinkReason(input *bio.Reader, length int64) (string, error) {
++	f, err := pe.NewFile(io.NewSectionReader(input.File(), input.Offset(), length))
++	if err != nil {
++		return "", err
++	}
++	defer f.Close()
++	if f.Machine != pe.IMAGE_FILE_MACHINE_ARM64 {
++		return "", nil
++	}
++
++	for i := 0; i < len(f.COFFSymbols); {
++		s := &f.COFFSymbols[i]
++		next := i + 1 + int(s.NumberOfAuxSymbols)
++		if next > len(f.COFFSymbols) {
++			return "", fmt.Errorf("truncated auxiliary symbols at index %d", i)
++		}
++		index := int(s.SectionNumber) - 1
++		if index >= 0 && index < len(f.Sections) &&
++			f.Sections[index].Characteristics&pe.IMAGE_SCN_LNK_COMDAT != 0 &&
++			s.StorageClass == IMAGE_SYM_CLASS_STATIC && s.Type == 0 && s.Value == 0 {
++			name, err := s.FullName(f.StringTable)
++			if err != nil {
++				return "", err
++			}
++			if name != f.Sections[index].Name {
++				// A static data leader can have the same class, type, and
++				// value, but is not the section's definition record.
++				i = next
++				continue
++			}
++			if s.NumberOfAuxSymbols != 1 {
++				return "", fmt.Errorf("invalid section-definition auxiliary count %d", s.NumberOfAuxSymbols)
++			}
++			aux, err := f.COFFSymbolReadSectionDefAux(i)
++			if err != nil {
++				return "", err
++			}
++			switch aux.Selection {
++			case pe.IMAGE_COMDAT_SELECT_NODUPLICATES, pe.IMAGE_COMDAT_SELECT_ANY, pe.IMAGE_COMDAT_SELECT_SAME_SIZE:
++				// Supported by the internal PE loader.
++			default:
++				return fmt.Sprintf("ARM64 COMDAT selection %d", aux.Selection), nil
++			}
++		}
++		i = next
++	}
++	for _, s := range f.Sections {
++		if s.Characteristics&pe.IMAGE_SCN_MEM_DISCARDABLE != 0 || s.Size == 0 {
++			continue
++		}
++		if s.Name == ".pdata" || strings.HasPrefix(s.Name, ".pdata$") ||
++			s.Name == ".xdata" || strings.HasPrefix(s.Name, ".xdata$") {
++			// The internal loader's SEH processing only supports AMD64.
++			// Retaining these as ordinary data would silently lose ARM64
++			// exception/unwind information, even without COMDAT sections.
++			return "ARM64 exception-handling data", nil
++		}
++	}
++	return "", nil
++}
+diff --git a/src/cmd/link/internal/loadpe/linkmode_test.go b/src/cmd/link/internal/loadpe/linkmode_test.go
+new file mode 100644
+--- /dev/null
++++ b/src/cmd/link/internal/loadpe/linkmode_test.go
+@@ -0,0 +1,243 @@
++// Copyright 2026 The Go Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style
++// license that can be found in the LICENSE file.
++
++package loadpe
++
++import (
++	"bytes"
++	"cmd/internal/bio"
++	"cmd/internal/sys"
++	"cmd/link/internal/loader"
++	"cmd/link/internal/sym"
++	"debug/pe"
++	"encoding/binary"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++type linkModeSection struct {
++	name        string
++	size        uint32
++	selection   uint8
++	parent      uint16
++	discardable bool
++	staticData  bool
++}
++
++func TestExternalLinkReason(t *testing.T) {
++	for _, tt := range []struct {
++		name     string
++		machine  uint16
++		sections []linkModeSection
++		want     string
++	}{
++		{"leaf", pe.IMAGE_FILE_MACHINE_ARM64, []linkModeSection{{name: ".text", size: 4}}, ""},
++		{"resources", pe.IMAGE_FILE_MACHINE_ARM64, []linkModeSection{{name: ".rsrc", size: 4}}, ""},
++		{"no duplicates", pe.IMAGE_FILE_MACHINE_ARM64, []linkModeSection{{name: ".text", size: 4, selection: pe.IMAGE_COMDAT_SELECT_NODUPLICATES}}, ""},
++		{"any", pe.IMAGE_FILE_MACHINE_ARM64, []linkModeSection{{name: ".text", size: 4, selection: pe.IMAGE_COMDAT_SELECT_ANY}}, ""},
++		{"same size", pe.IMAGE_FILE_MACHINE_ARM64, []linkModeSection{{name: ".text", size: 4, selection: pe.IMAGE_COMDAT_SELECT_SAME_SIZE}}, ""},
++		{"exact match", pe.IMAGE_FILE_MACHINE_ARM64, []linkModeSection{{name: ".text", size: 4, selection: pe.IMAGE_COMDAT_SELECT_EXACT_MATCH}}, "COMDAT selection 4"},
++		{"largest", pe.IMAGE_FILE_MACHINE_ARM64, []linkModeSection{{name: ".text", size: 4, selection: pe.IMAGE_COMDAT_SELECT_LARGEST}}, "COMDAT selection 6"},
++		{"empty associative", pe.IMAGE_FILE_MACHINE_ARM64, []linkModeSection{
++			{name: ".text", size: 4, selection: pe.IMAGE_COMDAT_SELECT_NODUPLICATES},
++			{name: ".xdata", selection: pe.IMAGE_COMDAT_SELECT_ASSOCIATIVE, parent: 1},
++		}, "COMDAT selection 5"},
++		{"packed unwind", pe.IMAGE_FILE_MACHINE_ARM64, []linkModeSection{
++			{name: ".text", size: 4}, {name: ".pdata", size: 8},
++		}, "exception-handling data"},
++		{"full unwind", pe.IMAGE_FILE_MACHINE_ARM64, []linkModeSection{
++			{name: ".text", size: 4}, {name: ".xdata", size: 8}, {name: ".pdata", size: 8},
++		}, "exception-handling data"},
++		{"empty unwind", pe.IMAGE_FILE_MACHINE_ARM64, []linkModeSection{{name: ".xdata"}, {name: ".pdata"}}, ""},
++		{"ordered unwind", pe.IMAGE_FILE_MACHINE_ARM64, []linkModeSection{{name: ".pdata$a", size: 8}}, "exception-handling data"},
++		{"discardable unwind", pe.IMAGE_FILE_MACHINE_ARM64, []linkModeSection{{name: ".pdata", size: 8, discardable: true}}, ""},
++		{"amd64 unchanged", pe.IMAGE_FILE_MACHINE_AMD64, []linkModeSection{{name: ".pdata", size: 12}}, ""},
++	} {
++		t.Run(tt.name, func(t *testing.T) {
++			data := linkModeObject(t, tt.machine, tt.sections)
++			// Exercise an archive member at a nonzero offset, with another
++			// member following it and bytes already in the buffered reader.
++			prefix := []byte("archive-prefix!!")
++			path := filepath.Join(t.TempDir(), "input.a")
++			if err := os.WriteFile(path, append(append(prefix, data...), []byte("next member")...), 0600); err != nil {
++				t.Fatal(err)
++			}
++			r, err := bio.Open(path)
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer r.Close()
++			r.MustSeek(int64(len(prefix)), 0)
++			if _, err := r.Peek(4); err != nil {
++				t.Fatal(err)
++			}
++			got, err := ExternalLinkReason(r, int64(len(data)))
++			if err != nil {
++				t.Fatal(err)
++			}
++			if tt.want == "" && got != "" || tt.want != "" && !strings.Contains(got, tt.want) {
++				t.Fatalf("ExternalLinkReason = %q, want %q", got, tt.want)
++			}
++			if off := r.Offset(); off != int64(len(prefix)) {
++				t.Fatalf("reader moved to %d", off)
++			}
++			if got, err := r.Peek(4); err != nil || !bytes.Equal(got, data[:4]) {
++				t.Fatalf("buffer changed: %x, %v", got, err)
++			}
++			if _, err := ExternalLinkReason(r, 19); err == nil {
++				t.Fatal("truncated member header was accepted")
++			}
++		})
++	}
++}
++
++func TestExternalLinkReasonStaticData(t *testing.T) {
++	for _, section := range []string{".data", ".bss"} {
++		t.Run(section, func(t *testing.T) {
++			// Clang -fdata-sections emits a section-definition record and
++			// a separate static data leader at offset zero, without aux data.
++			data := linkModeObject(t, pe.IMAGE_FILE_MACHINE_ARM64, []linkModeSection{{
++				name: section, size: 4, selection: pe.IMAGE_COMDAT_SELECT_NODUPLICATES, staticData: true,
++			}})
++			path := filepath.Join(t.TempDir(), "static.obj")
++			if err := os.WriteFile(path, data, 0600); err != nil {
++				t.Fatal(err)
++			}
++			r, err := bio.Open(path)
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer r.Close()
++			reason, scanErr := ExternalLinkReason(r, int64(len(data)))
++			// Confirm the fixture is genuinely supported by the internal
++			// loader, not merely accepted by the capability scan.
++			savedImports, savedCOMDATs := importSymsState, comdatDefinitions
++			importSymsState, comdatDefinitions = nil, nil
++			defer func() { importSymsState, comdatDefinitions = savedImports, savedCOMDATs }()
++			l := loader.NewLoader(0, &loader.ErrorReporter{AfterErrorAction: func() { t.Fatal("loader error") }})
++			if _, err := Load(l, sys.ArchARM64, sym.SymVerStatic, r, path, int64(len(data)), path); err != nil {
++				t.Fatalf("invalid regression fixture: %v", err)
++			}
++			if reason != "" || scanErr != nil {
++				t.Fatalf("supported static data requires external linking: %q, %v", reason, scanErr)
++			}
++		})
++	}
++}
++
++func TestExternalLinkReasonSectionDefinition(t *testing.T) {
++	for _, tt := range []struct {
++		name     string
++		longName bool
++		auxCount byte
++		wantErr  bool
++	}{
++		{"long section name", true, 1, false},
++		{"missing auxiliary record", false, 0, true},
++		{"extra auxiliary record", false, 2, true},
++	} {
++		t.Run(tt.name, func(t *testing.T) {
++			data := linkModeObject(t, pe.IMAGE_FILE_MACHINE_ARM64, []linkModeSection{{
++				name: ".data", size: 4, selection: pe.IMAGE_COMDAT_SELECT_EXACT_MATCH, staticData: true,
++			}})
++			symbolOffset := binary.LittleEndian.Uint32(data[8:12])
++			data[symbolOffset+17] = tt.auxCount
++			if tt.longName {
++				// COFF sections use /offset, while symbols use a binary
++				// offset into the string table for names over eight bytes.
++				copy(data[20:28], []byte{'/', '4', 0, 0, 0, 0, 0, 0})
++				copy(data[symbolOffset:symbolOffset+8], []byte{0, 0, 0, 0, 4, 0, 0, 0})
++				tableOffset := len(data) - 4
++				data = append(data, []byte(".data$long_name\x00")...)
++				binary.LittleEndian.PutUint32(data[tableOffset:], uint32(len(data)-tableOffset))
++			}
++			path := filepath.Join(t.TempDir(), "section.obj")
++			if err := os.WriteFile(path, data, 0600); err != nil {
++				t.Fatal(err)
++			}
++			r, err := bio.Open(path)
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer r.Close()
++			reason, err := ExternalLinkReason(r, int64(len(data)))
++			if tt.wantErr {
++				if err == nil || !strings.Contains(err.Error(), "auxiliary count") {
++					t.Fatalf("section-definition error = %v", err)
++				}
++			} else if err != nil || !strings.Contains(reason, "COMDAT selection 4") {
++				t.Fatalf("long-name COMDAT classification = %q, %v", reason, err)
++			}
++		})
++	}
++}
++
++func linkModeObject(t *testing.T, machine uint16, sections []linkModeSection) []byte {
++	t.Helper()
++	var data bytes.Buffer
++	write := func(v any) {
++		if err := binary.Write(&data, binary.LittleEndian, v); err != nil {
++			t.Fatal(err)
++		}
++	}
++	start := uint32(20 + 40*len(sections))
++	symbols := start
++	numSymbols := uint32(2 * len(sections))
++	for _, s := range sections {
++		if s.name != ".bss" {
++			symbols += s.size
++		}
++		if s.staticData {
++			numSymbols++
++		}
++	}
++	write(pe.FileHeader{Machine: machine, NumberOfSections: uint16(len(sections)),
++		PointerToSymbolTable: symbols, NumberOfSymbols: numSymbols})
++	for _, s := range sections {
++		var name [8]byte
++		copy(name[:], s.name)
++		flags := uint32(pe.IMAGE_SCN_CNT_INITIALIZED_DATA | pe.IMAGE_SCN_MEM_READ)
++		if s.name == ".text" {
++			flags = pe.IMAGE_SCN_CNT_CODE | pe.IMAGE_SCN_MEM_READ | pe.IMAGE_SCN_MEM_EXECUTE
++		} else if s.name == ".data" {
++			flags |= pe.IMAGE_SCN_MEM_WRITE
++		} else if s.name == ".bss" {
++			flags = pe.IMAGE_SCN_CNT_UNINITIALIZED_DATA | pe.IMAGE_SCN_MEM_READ | pe.IMAGE_SCN_MEM_WRITE
++		}
++		if s.selection != 0 {
++			flags |= pe.IMAGE_SCN_LNK_COMDAT
++		}
++		if s.discardable {
++			flags |= pe.IMAGE_SCN_MEM_DISCARDABLE
++		}
++		rawOffset := uint32(0)
++		if s.name != ".bss" {
++			rawOffset = start
++			start += s.size
++		}
++		write(pe.SectionHeader32{Name: name, SizeOfRawData: s.size, PointerToRawData: rawOffset, Characteristics: flags})
++	}
++	for _, s := range sections {
++		if s.name != ".bss" {
++			data.Write(make([]byte, s.size))
++		}
++	}
++	for i, s := range sections {
++		var name [8]byte
++		copy(name[:], s.name)
++		write(pe.COFFSymbol{Name: name, SectionNumber: int16(i + 1), StorageClass: IMAGE_SYM_CLASS_STATIC, NumberOfAuxSymbols: 1})
++		parent := s.parent
++		if parent == 0 {
++			parent = uint16(i + 1)
++		}
++		write(pe.COFFSymbolAuxFormat5{Size: s.size, SecNum: parent, Selection: s.selection})
++		if s.staticData {
++			write(pe.COFFSymbol{Name: [8]byte{'l', 'o', 'c', 'a', 'l'}, SectionNumber: int16(i + 1), StorageClass: IMAGE_SYM_CLASS_STATIC})
++		}
++	}
++	write(uint32(4))
++	return data.Bytes()
++}
+diff --git a/src/cmd/link/internal/ld/pe_linkmode_test.go b/src/cmd/link/internal/ld/pe_linkmode_test.go
+new file mode 100644
+index 00000000..2f8ea5ce
+--- /dev/null
++++ b/src/cmd/link/internal/ld/pe_linkmode_test.go
+@@ -0,0 +1,121 @@
++// Copyright 2026 The Go Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style
++// license that can be found in the LICENSE file.
++
++package ld
++
++import (
++	"bytes"
++	"cmd/internal/bio"
++	"cmd/internal/objabi"
++	"cmd/internal/sys"
++	"cmd/link/internal/sym"
++	"debug/pe"
++	"encoding/binary"
++	"internal/buildcfg"
++	"internal/testenv"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++func TestPEObjectLinkMode(t *testing.T) {
++	defer func(goos, goarch string) { buildcfg.GOOS, buildcfg.GOARCH = goos, goarch }(buildcfg.GOOS, buildcfg.GOARCH)
++	buildcfg.GOOS, buildcfg.GOARCH = "windows", "arm64"
++	t.Setenv("GO_EXTLINK_ENABLED", "")
++	forced := os.Getenv("GO_TEST_PE_FORCE_INTERNAL")
++	if forced == "environment" {
++		t.Setenv("GO_EXTLINK_ENABLED", "0")
++	}
++	for _, tt := range []struct {
++		name    string
++		section string
++		short   bool
++		mode    LinkMode
++		want    LinkMode
++		reason  string
++	}{
++		{"unwind", ".pdata", false, LinkAuto, LinkExternal, "exception-handling"},
++		{"resource", ".rsrc", false, LinkAuto, LinkInternal, ""},
++		{"short", ".text", true, LinkAuto, LinkExternal, "unsupported by internal linker"},
++		{"explicit external", ".text", true, LinkExternal, LinkExternal, ""},
++	} {
++		t.Run(tt.name, func(t *testing.T) {
++			defer func(h []Hostobj, e, c bool, p string) { hostobj, externalobj, iscgo, unsupportedPEObject = h, e, c, p }(hostobj, externalobj, iscgo, unsupportedPEObject)
++			hostobj, externalobj, iscgo, unsupportedPEObject = nil, false, true, ""
++			var data bytes.Buffer
++			write := func(v any) {
++				if err := binary.Write(&data, binary.LittleEndian, v); err != nil {
++					t.Fatal(err)
++				}
++			}
++			write(pe.FileHeader{Machine: pe.IMAGE_FILE_MACHINE_ARM64, NumberOfSections: 1})
++			var name [8]byte
++			copy(name[:], tt.section)
++			write(pe.SectionHeader32{Name: name, SizeOfRawData: 8, PointerToRawData: 60,
++				Characteristics: pe.IMAGE_SCN_CNT_INITIALIZED_DATA | pe.IMAGE_SCN_MEM_READ})
++			write(uint64(0))
++			// debug/pe reads a 96-byte header even for COFF object files.
++			data.Write(make([]byte, 96-data.Len()))
++			if tt.short {
++				data.Truncate(72)
++			}
++			path := filepath.Join(t.TempDir(), "host.obj")
++			if err := os.WriteFile(path, data.Bytes(), 0600); err != nil {
++				t.Fatal(err)
++			}
++			r, err := bio.Open(path)
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer r.Close()
++			ctxt := &Link{Arch: sys.ArchARM64, HeadType: objabi.Hwindows, BuildMode: BuildModePIE, LinkMode: tt.mode}
++			if forced == "flag" {
++				ctxt.LinkMode = LinkInternal
++			}
++			lib := &sym.Library{Pkg: "runtime/cgo"}
++			h := ldobj(ctxt, r, lib, int64(data.Len()), path, path)
++			if h == nil {
++				t.Fatal("PE input was not registered")
++			}
++			if h.off != 0 || h.length != int64(data.Len()) {
++				t.Fatalf("host object offset/length = %d/%d", h.off, h.length)
++			}
++			if ctxt.loader != nil {
++				t.Fatal("capability scan created loader state")
++			}
++			needed, reason := mustLinkExternal(ctxt)
++			if needed != (tt.reason != "") {
++				t.Fatalf("mustLinkExternal = %v (%s)", needed, reason)
++			}
++			if needed && (!strings.Contains(reason, path) || !strings.Contains(reason, tt.reason)) {
++				t.Fatalf("missing causal diagnostic: %s", reason)
++			}
++			determineLinkMode(ctxt)
++			if ctxt.LinkMode != tt.want {
++				t.Fatalf("link mode = %v, want %v", ctxt.LinkMode, tt.want)
++			}
++		})
++	}
++}
++
++func TestPEObjectLinkModeForcedInternal(t *testing.T) {
++	testenv.MustHaveExec(t)
++	for _, source := range []string{"flag", "environment"} {
++		t.Run(source, func(t *testing.T) {
++			cmd := testenv.Command(t, os.Args[0], "-test.run=^TestPEObjectLinkMode$/^unwind$")
++			cmd.Dir = t.TempDir()
++			cmd.Env = append(os.Environ(), "GO_TEST_PE_FORCE_INTERNAL="+source)
++			out, err := cmd.CombinedOutput()
++			if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 2 {
++				t.Fatalf("forced internal link = %v, want exit 2; output: %s", err, out)
++			}
++			if !bytes.Contains(out, []byte("external linking required")) ||
++				!bytes.Contains(out, []byte("ARM64 exception-handling data")) {
++				t.Fatalf("missing causal internal-link rejection: %s", out)
++			}
++		})
++	}
++}

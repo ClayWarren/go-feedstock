@@ -1,12 +1,14 @@
-# Windows ARM64 no-CGo validation
+# Windows ARM64 CGo validation
 
-This personal-fork branch validates patch 0015 and the Windows no-CGo
-certificate-fixture prerequisite on top of diagnostic baseline `71907d0`.
-It does not include patch 0016 or the pending CGo test-script changes, and
-does not claim to solve the CGo internal-linker limitations.
+This personal-fork branch starts from the green no-CGo validation at
+`66c0fff`. It adds patch 0016 to choose external linking for ARM64 COFF
+features that the internal linker cannot handle, while keeping supported
+static-data COMDATs eligible for internal linking. The CGo test script
+also uses the certificate-environment helper already validated by no-CGo.
+This is a separate CGo experiment, not an upstream PR update.
 
 The separate manual workflow on the fork's default branch takes an exact
-source commit. It runs only `win_arm64_cgofalsego_variant_strnocgo`, with
+source commit. It runs only `win_arm64_cgotruego_variant_strcgo`, with
 both build and target platforms set to `win-arm64`, and uploads disabled.
 The recipe remains version 1.27.1, build 4. Generated CI files are unchanged.
 
@@ -22,9 +24,13 @@ provisioning and failure-cleanup coverage were not exercised.
 The package then builds through the unchanged conda-forge harness. Its
 win-64 build-service tools may run under emulation; the Go compiler and Go
 tests must independently prove native ARM64 host, target, and execution.
-The no-CGo package tests preserve the authoritative dist suite and add
-positive FIPS inventory and actual integrity-test evidence. Existing
-`os`, `cmd/go`, and `cmd/gofmt` diagnostics remain separately logged.
+The CGo package tests preserve the native compiler and binary-architecture
+checks, explicit and automatic linking smoke tests, focused `runtime/cgo`
+and `cmd/cgo/internal/test` checks, and the authoritative dist suite. They
+also run the new linker regression tests explicitly. Existing `os`, `cmd/go`,
+and `cmd/gofmt` diagnostics remain separately logged. CGo and FIPS variants
+are not skipped to accommodate unsupported internal linking: any remaining
+failure must be diagnosed from the native run.
 
 Go 1.27 honors `SSL_CERT_FILE` and `SSL_CERT_DIR` on Windows, bypassing the
 platform verifier when either is set. Pixi exports these for its own CA

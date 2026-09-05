@@ -129,6 +129,26 @@ hello_win_arm64_external.exe
 if errorlevel 1 exit /b 1
 
 rem Keep the focused upstream CGo checks unmasked.
+rem Require the patch's tests to exist before using a filtered Go test run.
+go test -list=^^TestExternalLinkReason cmd/link/internal/loadpe > pe_load_tests.txt
+if errorlevel 1 exit /b 1
+go test -list=^^TestPEObjectLinkMode cmd/link/internal/ld > pe_link_tests.txt
+if errorlevel 1 exit /b 1
+powershell -NoLogo -NoProfile -NonInteractive -Command ^
+  "$ErrorActionPreference = 'Stop';" ^
+  "$loadTests = @(Get-Content -LiteralPath 'pe_load_tests.txt');" ^
+  "$linkTests = @(Get-Content -LiteralPath 'pe_link_tests.txt');" ^
+  "foreach ($name in @('TestExternalLinkReason', 'TestExternalLinkReasonStaticData')) {" ^
+  "  if ($loadTests -cnotcontains $name) { $loadTests; throw ('Missing loader test: ' + $name) }" ^
+  "};" ^
+  "foreach ($name in @('TestPEObjectLinkMode', 'TestPEObjectLinkModeForcedInternal')) {" ^
+  "  if ($linkTests -cnotcontains $name) { $linkTests; throw ('Missing linker test: ' + $name) }" ^
+  "}"
+if errorlevel 1 exit /b 1
+go test -count=1 -v -run=^^TestExternalLinkReason cmd/link/internal/loadpe
+if errorlevel 1 exit /b 1
+go test -count=1 -v -run=^^TestPEObjectLinkMode cmd/link/internal/ld
+if errorlevel 1 exit /b 1
 go test -count=1 runtime/cgo
 if errorlevel 1 exit /b 1
 go test -count=1 cmd/cgo/internal/test
@@ -163,15 +183,12 @@ rem Preserve only the existing Windows diagnostic exceptions, using actual
 rem package names. All remaining package and variant tests stay authoritative.
 go tool dist test -k -v -no-rebuild os cmd/go cmd/gofmt
 if errorlevel 1 echo Historical Windows diagnostic tests failed; see the log above.
-go tool dist test -k -v -no-rebuild "-run=!^(os|cmd/go|cmd/gofmt)$"
-if errorlevel 1 (
-  rem Compare the explicit-root verifier with Windows system trust, without
-  rem modifying certificate stores or masking the authoritative suite failure.
-  go test -count=1 -v "-run=^Test(Go|System)Verify$/^SHA-384$" crypto/x509
-  certutil -store -v Root A8985D3A65E5E5C4B2D7D66D40C6DD2FB19C5436
-  certutil -user -store -v Root A8985D3A65E5E5C4B2D7D66D40C6DD2FB19C5436
-  exit /b 1
-)
+rem Use the same native certificate-test environment as the no-CGo variant.
+rem The helper restores inherited CA overrides and preserves the suite status.
+set "GO_TEST_ALLOW_TEMPORARY_USER_ROOT="
+if "%GITHUB_ACTIONS%"=="true" if "%RUNNER_ENVIRONMENT%"=="github-hosted" set "GO_TEST_ALLOW_TEMPORARY_USER_ROOT=1"
+powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0..\windows\run_dist_tests.ps1"
+if errorlevel 1 exit /b %ERRORLEVEL%
 
 :done
 exit /b 0
