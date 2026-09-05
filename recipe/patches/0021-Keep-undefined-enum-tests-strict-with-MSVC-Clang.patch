@@ -1,18 +1,28 @@
-From ed17483c6f06bbd9df3c59257fd14cba3e22e686 Mon Sep 17 00:00:00 2001
+From a4a939095529ac7836809f273f27615fffa7a1e9 Mon Sep 17 00:00:00 2001
 From: ClayWarren <warren.clay@icloud.com>
-Date: Sat, 5 Sep 2026 15:57:54 -0500
-Subject: [PATCH] cmd/cgo: disable MS enum completion in negative tests
+Date: Sat, 5 Sep 2026 16:19:27 -0500
+Subject: [PATCH] cmd/cgo: keep strict enum type discovery on Windows ARM64
 
-CGo suppresses warnings while discovering types, so diagnostic pragmas do not reject MSVC Clang forward enums. Preserve the original fixtures and their exact-line error assertions; append -fno-ms-extensions only for these two Windows ARM64 test subprocesses, retaining configured CGO_CFLAGS. Do not change production compiler options or flag validation.
+MSVC-target Clang completes undefined enums as int. CGo suppresses the
+warning during type discovery, so a diagnostic pragma cannot enforce these
+two negative fixtures. Run their CGo phase with MS extensions disabled,
+retaining the configured compiler flags and the original error assertions.
+Do not rebuild runtime/cgo or Windows SDK headers with that test-only flag.
+Other targets and error fixtures still exercise full Go builds. Production
+compiler defaults and flag validation are unchanged.
 ---
- src/cmd/cgo/internal/testerrors/errors_test.go | 14 ++++++++++++++
- 1 file changed, 14 insertions(+)
-
 diff --git a/src/cmd/cgo/internal/testerrors/errors_test.go b/src/cmd/cgo/internal/testerrors/errors_test.go
-index 6af7c941..f0db71f6 100644
+index 6af7c941..cb8c8ae7 100644
 --- a/src/cmd/cgo/internal/testerrors/errors_test.go
 +++ b/src/cmd/cgo/internal/testerrors/errors_test.go
-@@ -12,6 +12,7 @@ import (
+@@ -6,12 +6,14 @@ package errorstest
+ 
+ import (
+ 	"bytes"
++	"cmd/internal/quoted"
+ 	"fmt"
+ 	"internal/testenv"
+ 	"os"
  	"os/exec"
  	"path/filepath"
  	"regexp"
@@ -20,25 +30,29 @@ index 6af7c941..f0db71f6 100644
  	"strconv"
  	"strings"
  	"testing"
-@@ -77,6 +78,19 @@ func expect(t *testing.T, errors []*regexp.Regexp, files ...string) {
+@@ -76,6 +78,25 @@ func expect(t *testing.T, errors []*regexp.Regexp, files ...string) {
+ 	for _, file := range files {
  		args = append(args, path(file))
  	}
- 	cmd := exec.Command(testenv.GoToolPath(t), args...)
 +	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" && len(files) == 1 &&
 +		(files[0] == "issue11097a.go" || files[0] == "issue11097b.go") {
 +		// MSVC-target Clang treats an undefined enum as a complete int.
 +		// These two negative tests require incomplete enums instead. A
 +		// diagnostic pragma is insufficient because cgo suppresses warnings
-+		// while reading types. Disable the extension only for these fixtures,
-+		// retaining the configured compiler flags and the error assertions.
-+		flags, err := testenv.Command(t, testenv.GoToolPath(t), "env", "CGO_CFLAGS").Output()
++		// while reading types. Test that phase directly with the extension
++		// disabled, without rebuilding runtime/cgo and the Windows SDK
++		// headers that require MS extensions. Keep the exact error assertions.
++		out, err := testenv.Command(t, testenv.GoToolPath(t), "env", "CGO_CPPFLAGS", "CGO_CFLAGS").Output()
 +		if err != nil {
 +			t.Fatal(err)
 +		}
-+		cmd.Env = append(os.Environ(), "CGO_CFLAGS="+strings.TrimSpace(string(flags))+" -fno-ms-extensions")
++		flags, err := quoted.Split(string(out))
++		if err != nil {
++			t.Fatal(err)
++		}
++		args = append([]string{"tool", "cgo", "-objdir", dir, "--"}, flags...)
++		args = append(args, "-fno-ms-extensions", path(files[0]))
 +	}
+ 	cmd := exec.Command(testenv.GoToolPath(t), args...)
  	out, err := cmd.CombinedOutput()
  	if err == nil {
- 		t.Errorf("expected cgo to fail but it succeeded")
--- 
-2.54.0 (Apple Git-156)

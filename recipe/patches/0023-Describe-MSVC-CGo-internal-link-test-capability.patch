@@ -1,0 +1,378 @@
+From c20a1b5213c3c9ca51f63a381154b0e7f8949bed Mon Sep 17 00:00:00 2001
+From: ClayWarren <warren.clay@icloud.com>
+Date: Sat, 5 Sep 2026 16:16:38 -0500
+Subject: [PATCH] cmd/dist, internal/testenv: detect MSVC CGo linker capability
+
+Retain Windows ARM64 internal-link support for other compilers and pure Go. Query the active C compiler including configured flags, and declare only MSVC ARM64 CGo external-only because its COFF COMDAT and unwind records are unsupported. Unknown compiler queries retain the existing tests. Cover quoted commands, target overrides, variant registration, and native forced-internal rejection alongside a runnable pure-Go internal link.
+---
+ src/cmd/dist/test.go                     |  43 ++++++++++
+ src/cmd/dist/test_test.go                |  40 +++++++++
+ src/cmd/link/internal/ld/pe_msvc_test.go |  33 ++++++++
+ src/internal/testenv/cgo_link.go         | 102 +++++++++++++++++++++++
+ src/internal/testenv/cgo_link_test.go    |  62 ++++++++++++++
+ src/internal/testenv/testenv.go          |   8 +-
+ 6 files changed, 287 insertions(+), 1 deletion(-)
+ create mode 100644 src/internal/testenv/cgo_link.go
+ create mode 100644 src/internal/testenv/cgo_link_test.go
+
+diff --git a/src/cmd/dist/test.go b/src/cmd/dist/test.go
+index f51d4a8d..596aa791 100644
+--- a/src/cmd/dist/test.go
++++ b/src/cmd/dist/test.go
+@@ -67,6 +67,7 @@ type tester struct {
+ 	compileOnly bool // just try to compile all tests, but no need to run
+ 	short       bool
+ 	cgoEnabled  bool
++	cgoExternal bool // the active C compiler requires external cgo linking
+ 	asmflags    string
+ 	json        bool
+ 	runRxStr    string
+@@ -136,6 +137,9 @@ func (t *tester) run() {
+ 		fatalf("Error running %s: output contains <1 lines\n%s", cmd, cmd.Stderr)
+ 	}
+ 	t.cgoEnabled, _ = strconv.ParseBool(parts[0])
++	if t.cgoEnabled && goos == "windows" && goarch == "arm64" {
++		t.cgoExternal = msvcCgoNeedsExternalLink(cgoCompilerTarget())
++	}
+ 
+ 	if flag.NArg() > 0 && t.runRxStr != "" {
+ 		fatalf("the -run regular expression flag is mutually exclusive with test name arguments")
+@@ -1232,6 +1236,9 @@ func (t *tester) extLink() bool {
+ }
+ 
+ func (t *tester) internalLink() bool {
++	if t.cgoExternal {
++		return false
++	}
+ 	if gohostos == "dragonfly" {
+ 		// linkmode=internal fails on dragonfly since errno is a TLS relocation.
+ 		return false
+@@ -1264,6 +1271,42 @@ func (t *tester) internalLink() bool {
+ 	return true
+ }
+ 
++// Keep the target check and compiler query in sync with internal/testenv.
++// The bootstrap-built dist command cannot import that package.
++func msvcCgoNeedsExternalLink(target string) bool {
++	parts := strings.Split(strings.TrimSpace(target), "-")
++	if len(parts) < 3 || (parts[0] != "aarch64" && parts[0] != "arm64") || parts[len(parts)-2] != "windows" {
++		return false
++	}
++	abi := parts[len(parts)-1]
++	return abi == "msvc" || len(abi) > 4 && strings.HasPrefix(abi, "msvc") && abi[4] >= '0' && abi[4] <= '9'
++}
++
++func cgoCompilerTarget() string {
++	out, err := exec.Command(gorootBinGo, "env", "CC", "CGO_CPPFLAGS", "CGO_CFLAGS").Output()
++	if err != nil {
++		return ""
++	}
++	lines := strings.Split(strings.TrimSuffix(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n"), "\n")
++	if len(lines) != 3 {
++		return ""
++	}
++	var args []string
++	for i, line := range lines {
++		part, err := quotedSplit(line)
++		if err != nil || i == 0 && (len(part) == 0 || part[0] == "") {
++			return ""
++		}
++		args = append(args, part...)
++	}
++	out, err = exec.Command(args[0], append(args[1:], "-dumpmachine")...).Output()
++	if err != nil {
++		// An unknown or broken compiler must not silently disable tests.
++		return ""
++	}
++	return strings.TrimSpace(string(out))
++}
++
+ func (t *tester) internalLinkPIE() bool {
+ 	if t.msan || t.asan {
+ 		// linkmode=internal isn't supported by msan or asan.
+diff --git a/src/cmd/dist/test_test.go b/src/cmd/dist/test_test.go
+index 8d0e40c6..d4af37ae 100644
+--- a/src/cmd/dist/test_test.go
++++ b/src/cmd/dist/test_test.go
+@@ -93,3 +93,43 @@ func TestFIPSLinkRegistration(t *testing.T) {
+ 		}
+ 	}
+ }
++
++func TestMSVCCgoLinkRegistration(t *testing.T) {
++	defer func(o, a, ho, ha string) {
++		goos, goarch, gohostos, gohostarch = o, a, ho, ha
++	}(goos, goarch, gohostos, gohostarch)
++	goos, goarch, gohostos, gohostarch = "windows", "arm64", "windows", "arm64"
++	t.Setenv("GO_BUILDER_NAME", "")
++	t.Setenv("GO_TEST_SHARDS", "1")
++	for _, target := range []string{"aarch64-pc-windows-msvc", "aarch64-windows-msvc19.30.0", "aarch64-w64-mingw32", ""} {
++		t.Run(target, func(t *testing.T) {
++			externalOnly := msvcCgoNeedsExternalLink(target)
++			if externalOnly != strings.Contains(target, "-msvc") {
++				t.Fatalf("unexpected compiler classification: %s", target)
++			}
++			dt := tester{
++				cgoEnabled:  true,
++				cgoExternal: externalOnly,
++				short:       true,
++				runNames:    []string{"reflect:pie_internal"},
++			}
++			dt.registerTests()
++			for _, name := range []string{
++				"cmd/cgo/internal/test:internal", "cmd/cgo/internal/test:internal-pie", "os/user:pie_internal",
++			} {
++				if got := dt.testNames[name]; got == externalOnly {
++					t.Errorf("CGo test %s registered = %v; external-only compiler = %v", name, got, externalOnly)
++				}
++			}
++			for _, name := range []string{
++				"cmd/cgo/internal/test:external", "cmd/cgo/internal/test:external-s", "cmd/cgo/internal/test:auto-pie",
++				"reflect:pie_internal", "crypto/internal/fips140test:pie_internal",
++				"crypto/internal/fips140test:exe_external", "crypto/internal/fips140test:pie_external",
++			} {
++				if !dt.testNames[name] {
++					t.Errorf("supported test %s was not registered", name)
++				}
++			}
++		})
++	}
++}
+diff --git a/src/cmd/link/internal/ld/pe_msvc_test.go b/src/cmd/link/internal/ld/pe_msvc_test.go
+index 8240068d..ae3a5471 100644
+--- a/src/cmd/link/internal/ld/pe_msvc_test.go
++++ b/src/cmd/link/internal/ld/pe_msvc_test.go
+@@ -190,3 +190,36 @@ func main() {}
+ 		t.Errorf("CRT initializer has %d relocations, want 1", len(init.Relocs))
+ 	}
+ }
++
++func TestWindowsMSVCInternalLinkModes(t *testing.T) {
++	goTool := mustHaveMSVC(t)
++	if runtime.GOARCH != "arm64" {
++		t.Skip("ARM64 MSVC CGo linker capability")
++	}
++	dir := t.TempDir()
++	src := filepath.Join(dir, "main.go")
++	if err := os.WriteFile(src, []byte("package main\n// int answer(void) { return 42; }\nimport \"C\"\nfunc main() { _ = C.answer() }\n"), 0666); err != nil {
++		t.Fatal(err)
++	}
++	exe := filepath.Join(dir, "main.exe")
++	out, err := testenv.Command(t, goTool, "build", "-ldflags=-linkmode=internal", "-o", exe, src).CombinedOutput()
++	if err == nil || !bytes.Contains(out, []byte("external linking required")) ||
++		(!bytes.Contains(out, []byte("ARM64 COMDAT selection")) && !bytes.Contains(out, []byte("ARM64 exception-handling data"))) {
++		t.Fatalf("expected the documented MSVC CGo limitation: %v\n%s", err, out)
++	}
++	if testenv.CanInternalLink(true) {
++		t.Error("test environment incorrectly enables MSVC ARM64 internal CGo linking")
++	}
++	if !testenv.CanInternalLink(false) {
++		t.Error("test environment incorrectly disables pure Go internal linking")
++	}
++	if err := os.WriteFile(src, []byte("package main\nfunc main() {}\n"), 0666); err != nil {
++		t.Fatal(err)
++	}
++	if out, err := testenv.Command(t, goTool, "build", "-ldflags=-linkmode=internal", "-o", exe, src).CombinedOutput(); err != nil {
++		t.Fatalf("pure Go internal link: %v\n%s", err, out)
++	}
++	if out, err := testenv.Command(t, exe).CombinedOutput(); err != nil || len(out) != 0 {
++		t.Fatalf("pure Go execution: %v\n%s", err, out)
++	}
++}
+diff --git a/src/internal/testenv/cgo_link.go b/src/internal/testenv/cgo_link.go
+new file mode 100644
+index 00000000..e36d474c
+--- /dev/null
++++ b/src/internal/testenv/cgo_link.go
+@@ -0,0 +1,102 @@
++// Copyright 2026 The Go Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style
++// license that can be found in the LICENSE file.
++
++package testenv
++
++import (
++	"fmt"
++	"os/exec"
++	"strings"
++	"sync"
++)
++
++// MSVC ARM64 CGo objects require associative COMDAT and ARM64 unwind support
++// which the internal PE loader does not implement. Other ARM64 toolchains and
++// pure Go programs keep their existing internal-link tests.
++// Keep the target check and compiler query in sync with cmd/dist/test.go.
++func msvcCgoNeedsExternalLink(target string) bool {
++	parts := strings.Split(strings.TrimSpace(target), "-")
++	if len(parts) < 3 || (parts[0] != "aarch64" && parts[0] != "arm64") || parts[len(parts)-2] != "windows" {
++		return false
++	}
++	abi := parts[len(parts)-1]
++	return abi == "msvc" || len(abi) > 4 && strings.HasPrefix(abi, "msvc") && abi[4] >= '0' && abi[4] <= '9'
++}
++
++var cgoCompilerTarget = sync.OnceValue(func() string {
++	goTool, err := goTool()
++	if err != nil {
++		return ""
++	}
++	cmd := exec.Command(goTool, "env", "CC", "CGO_CPPFLAGS", "CGO_CFLAGS")
++	cmd.Env = origEnv
++	out, err := cmd.Output()
++	if err != nil {
++		return ""
++	}
++	args, err := cgoCompilerArgs(string(out))
++	if err != nil {
++		return ""
++	}
++	cmd = exec.Command(args[0], append(args[1:], "-dumpmachine")...)
++	cmd.Env = origEnv
++	out, err = cmd.Output()
++	if err != nil {
++		// An unknown or broken compiler must not silently disable tests.
++		return ""
++	}
++	return strings.TrimSpace(string(out))
++})
++
++func cgoCompilerArgs(env string) ([]string, error) {
++	lines := strings.Split(strings.TrimSuffix(strings.ReplaceAll(env, "\r\n", "\n"), "\n"), "\n")
++	if len(lines) != 3 {
++		return nil, fmt.Errorf("expected three compiler environment values")
++	}
++	var args []string
++	for i, line := range lines {
++		part, err := cgoQuotedSplit(line)
++		if err != nil {
++			return nil, err
++		}
++		if i == 0 && (len(part) == 0 || part[0] == "") {
++			return nil, fmt.Errorf("empty C compiler command")
++		}
++		args = append(args, part...)
++	}
++	return args, nil
++}
++
++// cgoQuotedSplit follows cmd/internal/quoted.Split. testenv cannot import a
++// cmd/internal package. Quoted fields preserve Windows backslashes verbatim.
++func cgoQuotedSplit(s string) ([]string, error) {
++	space := func(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
++	var fields []string
++	for len(s) > 0 {
++		for len(s) > 0 && space(s[0]) {
++			s = s[1:]
++		}
++		if len(s) == 0 {
++			break
++		}
++		if s[0] == '"' || s[0] == '\'' {
++			quote := s[0]
++			s = s[1:]
++			i := strings.IndexByte(s, quote)
++			if i < 0 {
++				return nil, fmt.Errorf("unterminated %c string", quote)
++			}
++			fields = append(fields, s[:i])
++			s = s[i+1:]
++			continue
++		}
++		i := 0
++		for i < len(s) && !space(s[i]) {
++			i++
++		}
++		fields = append(fields, s[:i])
++		s = s[i:]
++	}
++	return fields, nil
++}
+diff --git a/src/internal/testenv/cgo_link_test.go b/src/internal/testenv/cgo_link_test.go
+new file mode 100644
+index 00000000..a46d7ced
+--- /dev/null
++++ b/src/internal/testenv/cgo_link_test.go
+@@ -0,0 +1,62 @@
++// Copyright 2026 The Go Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style
++// license that can be found in the LICENSE file.
++
++package testenv
++
++import (
++	"slices"
++	"testing"
++)
++
++func TestMSVCCgoExternalLinkTarget(t *testing.T) {
++	for _, test := range []struct {
++		target string
++		want   bool
++	}{
++		{"aarch64-pc-windows-msvc", true},
++		{"aarch64-windows-msvc19.30.0\r\n", true},
++		{"arm64-unknown-windows-msvc", true},
++		{"aarch64-w64-windows-gnu", false},
++		{"aarch64-w64-mingw32", false},
++		{"x86_64-pc-windows-msvc", false},
++		{"aarch64-apple-darwin", false},
++		{"aarch64-unknown-linux-gnu", false},
++		{"aarch64-windows-msvc-invalid", false},
++		{"aarch64-windows-msvcish", false},
++		{"", false},
++	} {
++		if got := msvcCgoNeedsExternalLink(test.target); got != test.want {
++			t.Errorf("target %q: requires external linking = %v, want %v", test.target, got, test.want)
++		}
++	}
++}
++
++func TestCgoCompilerArgs(t *testing.T) {
++	for _, test := range []struct {
++		name, env string
++		want      []string
++	}{
++		{"native", "clang.exe\n\n-O2\n", []string{"clang.exe", "-O2"}},
++		{"quoted paths", "\"C:\\Compiler Tools\\clang.exe\"\r\n-I\"raw\\path\"\r\n'-DVALUE=with space' -O2\r\n", []string{`C:\Compiler Tools\clang.exe`, `-I"raw\path"`, "-DVALUE=with space", "-O2"}},
++		{"compiler wrapper", "ccache clang.exe --target=aarch64-windows-msvc\n-DWIN32\n-O2\n", []string{"ccache", "clang.exe", "--target=aarch64-windows-msvc", "-DWIN32", "-O2"}},
++		{"flag target override", "clang.exe\n\n--target=aarch64-w64-windows-gnu\n", []string{"clang.exe", "--target=aarch64-w64-windows-gnu"}},
++		{"empty compiler", "\n\n-O2\n", nil},
++		{"quoted empty compiler", "\"\"\n\n-O2\n", nil},
++		{"wrong line count", "clang.exe\n-O2\n", nil},
++		{"unclosed quote", "\"clang.exe\n\n-O2\n", nil},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			got, err := cgoCompilerArgs(test.env)
++			if test.want == nil {
++				if err == nil {
++					t.Fatal("invalid compiler configuration was accepted")
++				}
++				return
++			}
++			if err != nil || !slices.Equal(got, test.want) {
++				t.Fatalf("compiler arguments = %q, %v; want %q", got, err, test.want)
++			}
++		})
++	}
++}
+diff --git a/src/internal/testenv/testenv.go b/src/internal/testenv/testenv.go
+index 5aeb5815..c560e079 100644
+--- a/src/internal/testenv/testenv.go
++++ b/src/internal/testenv/testenv.go
+@@ -353,7 +353,13 @@ func MustHaveCGO(t testing.TB) {
+ // CanInternalLink reports whether the current system can link programs with
+ // internal linking.
+ func CanInternalLink(withCgo bool) bool {
+-	return !platform.MustLinkExternal(runtime.GOOS, runtime.GOARCH, withCgo)
++	if platform.MustLinkExternal(runtime.GOOS, runtime.GOARCH, withCgo) {
++		return false
++	}
++	if withCgo && runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
++		return !msvcCgoNeedsExternalLink(cgoCompilerTarget())
++	}
++	return true
+ }
+ 
+ // SpecialBuildTypes are interesting build types that may affect linking.
+-- 
+2.54.0 (Apple Git-156)

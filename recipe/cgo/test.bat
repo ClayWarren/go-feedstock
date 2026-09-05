@@ -140,6 +140,8 @@ go test -list=^^TestReportsTypeErrors$ cmd/cgo/internal/testerrors > cgo_error_t
 if errorlevel 1 exit /b 1
 go test -list=^^TestIssue59213$ runtime > cgo_runtime_tests.txt
 if errorlevel 1 exit /b 1
+go test -list=. internal/testenv cmd/dist > cgo_capability_tests.txt
+if errorlevel 1 exit /b 1
 powershell -NoLogo -NoProfile -NonInteractive -Command ^
   "$ErrorActionPreference = 'Stop';" ^
   "$loadTests = @(Get-Content -LiteralPath 'pe_load_tests.txt');" ^
@@ -147,45 +149,58 @@ powershell -NoLogo -NoProfile -NonInteractive -Command ^
   "$flagTests = @(Get-Content -LiteralPath 'cgo_flag_tests.txt');" ^
   "$errorTests = @(Get-Content -LiteralPath 'cgo_error_tests.txt');" ^
   "$runtimeTests = @(Get-Content -LiteralPath 'cgo_runtime_tests.txt');" ^
+  "$capabilityTests = @(Get-Content -LiteralPath 'cgo_capability_tests.txt');" ^
   "foreach ($name in @('TestExternalLinkReason', 'TestExternalLinkReasonStaticData')) {" ^
   "  if ($loadTests -cnotcontains $name) { $loadTests; throw ('Missing loader test: ' + $name) }" ^
   "};" ^
-  "foreach ($name in @('TestPEObjectLinkMode', 'TestPEObjectLinkModeForcedInternal', 'TestMSVCDebugFlags', 'TestDefaultExternalLinker', 'TestWindowsMSVCExternalDebugInfo', 'TestWindowsMSVCSharedInitializer')) {" ^
+  "foreach ($name in @('TestPEObjectLinkMode', 'TestPEObjectLinkModeForcedInternal', 'TestMSVCDebugFlags', 'TestDefaultExternalLinker', 'TestWindowsMSVCExternalDebugInfo', 'TestWindowsMSVCSharedInitializer', 'TestWindowsMSVCInternalLinkModes')) {" ^
   "  if ($linkTests -cnotcontains $name) { $linkTests; throw ('Missing linker test: ' + $name) }" ^
   "};" ^
   "foreach ($name in @('TestRemoveCgoLDFLAGS', 'TestRemoveCgoLDFLAGSPreservesValidation')) {" ^
   "  if ($flagTests -cnotcontains $name) { $flagTests; throw ('Missing CGo flag test: ' + $name) }" ^
   "};" ^
+  "foreach ($name in @('TestMSVCCgoExternalLinkTarget', 'TestCgoCompilerArgs', 'TestMSVCCgoLinkRegistration')) {" ^
+  "  if ($capabilityTests -cnotcontains $name) { $capabilityTests; throw ('Missing CGo capability test: ' + $name) }" ^
+  "};" ^
   "if ($errorTests -cnotcontains 'TestReportsTypeErrors') { $errorTests; throw 'Missing CGo type-error tests' };" ^
   "if ($runtimeTests -cnotcontains 'TestIssue59213') { $runtimeTests; throw 'Missing Go DLL runtime test' }"
 if errorlevel 1 exit /b 1
+rem Collect independent focused failures, preserving a fatal result after
+rem every focused check has run. Prerequisite and test-inventory failures
+rem above still stop immediately.
+set "GO_FOCUSED_TESTS_FAILED=0"
 go test -count=1 -v -run=^^TestExternalLinkReason cmd/link/internal/loadpe
-if errorlevel 1 exit /b 1
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 -v -run=^^TestPEObjectLinkMode cmd/link/internal/ld
-if errorlevel 1 exit /b 1
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 -v -run=^^TestMSVCDebugFlags$ cmd/link/internal/ld
-if errorlevel 1 exit /b 1
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 -v -run=^^TestDefaultExternalLinker$ cmd/link/internal/ld
-if errorlevel 1 exit /b 1
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 -v -run=^^TestWindowsMSVC cmd/link/internal/ld
-if errorlevel 1 exit /b 1
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
+go test -count=1 -v -run=^^TestMSVCCgo internal/testenv cmd/dist
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
+go test -count=1 -v -run=^^TestCgoCompilerArgs$ internal/testenv
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 -v -run=^^TestRemoveCgoLDFLAGS cmd/go/internal/work
-if errorlevel 1 exit /b 1
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 -v -run=^^TestReportsTypeErrors$ cmd/cgo/internal/testerrors
-if errorlevel 1 exit /b 1
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 cmd/cgo/internal/testso cmd/cgo/internal/testlife cmd/cgo/internal/teststdio
-if errorlevel 1 exit /b 1
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 rem Keep the DLL initialization test authoritative, with a focused timeout.
 go test -count=1 -v -timeout=3m -run=^^TestIssue59213$ runtime
-if errorlevel 1 exit /b 1
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 runtime/cgo
-if errorlevel 1 exit /b 1
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 cmd/cgo/internal/test
-if errorlevel 1 exit /b 1
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 -run=^^Test8694$ -v cmd/cgo/internal/test
-if errorlevel 1 exit /b 1
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 -ldflags="-linkmode=external" cmd/cgo/internal/test
-if errorlevel 1 exit /b 1
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
+if not "%GO_FOCUSED_TESTS_FAILED%"=="0" exit /b 1
 
 go build -trimpath -o hello_win_arm64.exe "%~dp0hello_win_arm64.go"
 if errorlevel 1 exit /b 1

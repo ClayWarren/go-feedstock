@@ -35,6 +35,7 @@ source:
       - patches/0020-Match-configured-CGo-flags-in-generated-form.patch
       - patches/0021-Keep-undefined-enum-tests-strict-with-MSVC-Clang.patch
       - patches/0022-Honor-the-native-Windows-ARM64-C-compiler.patch
+      - patches/0023-Describe-MSVC-CGo-internal-link-test-capability.patch
 
   # Update this with a release from https://go.dev/dl/
   - if: build_platform == "linux-64"
