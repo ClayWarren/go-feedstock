@@ -132,22 +132,51 @@ rem Keep the focused upstream CGo checks unmasked.
 rem Require the patch's tests to exist before using a filtered Go test run.
 go test -list=^^TestExternalLinkReason cmd/link/internal/loadpe > pe_load_tests.txt
 if errorlevel 1 exit /b 1
-go test -list=^^TestPEObjectLinkMode cmd/link/internal/ld > pe_link_tests.txt
+go test -list=. cmd/link/internal/ld > pe_link_tests.txt
+if errorlevel 1 exit /b 1
+go test -list=^^TestRemoveCgoLDFLAGS cmd/go/internal/work > cgo_flag_tests.txt
+if errorlevel 1 exit /b 1
+go test -list=^^TestReportsTypeErrors$ cmd/cgo/internal/testerrors > cgo_error_tests.txt
+if errorlevel 1 exit /b 1
+go test -list=^^TestIssue59213$ runtime > cgo_runtime_tests.txt
 if errorlevel 1 exit /b 1
 powershell -NoLogo -NoProfile -NonInteractive -Command ^
   "$ErrorActionPreference = 'Stop';" ^
   "$loadTests = @(Get-Content -LiteralPath 'pe_load_tests.txt');" ^
   "$linkTests = @(Get-Content -LiteralPath 'pe_link_tests.txt');" ^
+  "$flagTests = @(Get-Content -LiteralPath 'cgo_flag_tests.txt');" ^
+  "$errorTests = @(Get-Content -LiteralPath 'cgo_error_tests.txt');" ^
+  "$runtimeTests = @(Get-Content -LiteralPath 'cgo_runtime_tests.txt');" ^
   "foreach ($name in @('TestExternalLinkReason', 'TestExternalLinkReasonStaticData')) {" ^
   "  if ($loadTests -cnotcontains $name) { $loadTests; throw ('Missing loader test: ' + $name) }" ^
   "};" ^
-  "foreach ($name in @('TestPEObjectLinkMode', 'TestPEObjectLinkModeForcedInternal')) {" ^
+  "foreach ($name in @('TestPEObjectLinkMode', 'TestPEObjectLinkModeForcedInternal', 'TestMSVCDebugFlags', 'TestDefaultExternalLinker', 'TestWindowsMSVCExternalDebugInfo', 'TestWindowsMSVCSharedInitializer')) {" ^
   "  if ($linkTests -cnotcontains $name) { $linkTests; throw ('Missing linker test: ' + $name) }" ^
-  "}"
+  "};" ^
+  "foreach ($name in @('TestRemoveCgoLDFLAGS', 'TestRemoveCgoLDFLAGSPreservesValidation')) {" ^
+  "  if ($flagTests -cnotcontains $name) { $flagTests; throw ('Missing CGo flag test: ' + $name) }" ^
+  "};" ^
+  "if ($errorTests -cnotcontains 'TestReportsTypeErrors') { $errorTests; throw 'Missing CGo type-error tests' };" ^
+  "if ($runtimeTests -cnotcontains 'TestIssue59213') { $runtimeTests; throw 'Missing Go DLL runtime test' }"
 if errorlevel 1 exit /b 1
 go test -count=1 -v -run=^^TestExternalLinkReason cmd/link/internal/loadpe
 if errorlevel 1 exit /b 1
 go test -count=1 -v -run=^^TestPEObjectLinkMode cmd/link/internal/ld
+if errorlevel 1 exit /b 1
+go test -count=1 -v -run=^^TestMSVCDebugFlags$ cmd/link/internal/ld
+if errorlevel 1 exit /b 1
+go test -count=1 -v -run=^^TestDefaultExternalLinker$ cmd/link/internal/ld
+if errorlevel 1 exit /b 1
+go test -count=1 -v -run=^^TestWindowsMSVC cmd/link/internal/ld
+if errorlevel 1 exit /b 1
+go test -count=1 -v -run=^^TestRemoveCgoLDFLAGS cmd/go/internal/work
+if errorlevel 1 exit /b 1
+go test -count=1 -v -run=^^TestReportsTypeErrors$ cmd/cgo/internal/testerrors
+if errorlevel 1 exit /b 1
+go test -count=1 cmd/cgo/internal/testso cmd/cgo/internal/testlife cmd/cgo/internal/teststdio
+if errorlevel 1 exit /b 1
+rem Keep the DLL initialization test authoritative, with a focused timeout.
+go test -count=1 -v -timeout=3m -run=^^TestIssue59213$ runtime
 if errorlevel 1 exit /b 1
 go test -count=1 runtime/cgo
 if errorlevel 1 exit /b 1
