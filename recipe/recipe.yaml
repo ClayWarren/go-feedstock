@@ -37,6 +37,7 @@ source:
       - patches/0022-Honor-the-native-Windows-ARM64-C-compiler.patch
       - patches/0023-Describe-MSVC-CGo-internal-link-test-capability.patch
       - patches/0024-Resolve-MSVC-CGo-DLL-variable-addresses.patch
+      - patches/0025-Keep-GNU-linker-scripts-away-from-Microsoft-LINK.patch
 
   # Update this with a release from https://go.dev/dl/
   - if: build_platform == "linux-64"

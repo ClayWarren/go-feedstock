@@ -1,0 +1,119 @@
+From 09cbfbe5afdca97d684283f649badf24be10113f Mon Sep 17 00:00:00 2001
+From: ClayWarren <warren.clay@icloud.com>
+Date: Sat, 5 Sep 2026 18:37:21 -0500
+Subject: [PATCH] cmd/link: keep GNU linker scripts away from Microsoft LINK
+
+The existing Windows GNU ld workaround is not applicable to the MSVC linker. Consumers replacing CGO_LDFLAGS can select LINK instead of LLD, where the GNU script produces LNK1107. Preserve the GNU case and omit the workaround for both MSVC linkers.
+
+Cover all four compiler/linker combinations and a normal ARM64 CGo executable linked explicitly with Microsoft LINK after a CGO_LDFLAGS override. Keep the malformed-object regression unchanged.
+---
+ src/cmd/link/internal/ld/lib.go          |  8 +++-
+ src/cmd/link/internal/ld/pe_msvc_test.go | 60 ++++++++++++++++++++++++
+ 2 files changed, 67 insertions(+), 1 deletion(-)
+
+diff --git a/src/cmd/link/internal/ld/lib.go b/src/cmd/link/internal/ld/lib.go
+index 24e1254c..4faa5672 100644
+--- a/src/cmd/link/internal/ld/lib.go
++++ b/src/cmd/link/internal/ld/lib.go
+@@ -2011,7 +2011,7 @@ func (ctxt *Link) hostlink() {
+ 	if ctxt.HeadType == objabi.Hwindows {
+ 		// use gcc linker script to work around gcc bug
+ 		// (see https://golang.org/issue/20183 for details).
+-		if !isLLD {
++		if windowsNeedsGDBLinkerScript(isMSVC, isLLD) {
+ 			p := writeGDBLinkerScript()
+ 			argv = append(argv, "-Wl,-T,"+p)
+ 		}
+@@ -3236,6 +3236,12 @@ func (ctxt *Link) findExtLinkTool(toolname string) string {
+ 	return cmdpath
+ }
+ 
++// windowsNeedsGDBLinkerScript limits the GNU ld workaround to its toolchain.
++// LLD does not need the workaround, and Microsoft LINK cannot read GNU scripts.
++func windowsNeedsGDBLinkerScript(isMSVC, isLLD bool) bool {
++	return !isMSVC && !isLLD
++}
++
+ // msvcDebugFlags preserves Go's symbol and DWARF settings with lld-link.
+ // Unlike GNU ld, lld-link omits the COFF symbol table and DWARF by default,
+ // and MSVC-target Clang does not accept the GNU -s and -Wl,-S options.
+diff --git a/src/cmd/link/internal/ld/pe_msvc_test.go b/src/cmd/link/internal/ld/pe_msvc_test.go
+index ae3a5471..781ea5cd 100644
+--- a/src/cmd/link/internal/ld/pe_msvc_test.go
++++ b/src/cmd/link/internal/ld/pe_msvc_test.go
+@@ -17,6 +17,24 @@ import (
+ 	"testing"
+ )
+ 
++func TestWindowsGDBLinkerScript(t *testing.T) {
++	for _, test := range []struct {
++		name            string
++		msvc, lld, want bool
++	}{
++		{"GNU ld", false, false, true},
++		{"MinGW LLD", false, true, false},
++		{"Microsoft LINK", true, false, false},
++		{"MSVC LLD", true, true, false},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			if got := windowsNeedsGDBLinkerScript(test.msvc, test.lld); got != test.want {
++				t.Fatalf("windowsNeedsGDBLinkerScript() = %v, want %v", got, test.want)
++			}
++		})
++	}
++}
++
+ func TestMSVCDebugFlags(t *testing.T) {
+ 	for _, test := range []struct {
+ 		name                     string
+@@ -152,6 +170,48 @@ func main() { if C.answer() != 42 { panic("incorrect C result") } }
+ 	}
+ }
+ 
++func TestWindowsMSVCLinkerNoGDBScript(t *testing.T) {
++	goTool := mustHaveMSVC(t)
++	if runtime.GOARCH != "arm64" {
++		t.Skip("Windows ARM64 MSVC linker regression")
++	}
++	testenv.MustHaveExecPath(t, "link.exe")
++	dir := t.TempDir()
++	src := filepath.Join(dir, "main.go")
++	if err := os.WriteFile(src, []byte(`package main
++// int answer(void) { return 42; }
++import "C"
++func main() { if C.answer() != 42 { panic("incorrect C result") } }
++`), 0666); err != nil {
++		t.Fatal(err)
++	}
++	exe := filepath.Join(dir, "main.exe")
++	cmd := testenv.Command(t, goTool, "build", "-ldflags=-linkmode=external -extldflags=-fuse-ld=link -v", "-o", exe, src)
++	// A consumer can replace CGO_LDFLAGS without retaining conda's LLD
++	// default. Exercise that supported environment override with a plain
++	// CGo program, selecting Microsoft LINK explicitly for this test.
++	cmd.Env = append(cmd.Environ(), "CGO_LDFLAGS=-Wno-such-warning -Wno-unknown-warning-option")
++	out, err := cmd.CombinedOutput()
++	if err != nil {
++		t.Fatalf("Microsoft LINK build: %v\n%s", err, out)
++	}
++	if bytes.Contains(out, []byte("fix_debug_gdb_scripts.ld")) ||
++		!bytes.Contains(out, []byte("-fuse-ld=link")) || !bytes.Contains(out, []byte("-Wno-such-warning")) {
++		t.Fatalf("incorrect Microsoft LINK command:\n%s", out)
++	}
++	f, err := pe.Open(exe)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer f.Close()
++	if f.Machine != pe.IMAGE_FILE_MACHINE_ARM64 {
++		t.Fatalf("PE machine = %#x, want ARM64", f.Machine)
++	}
++	if out, err := testenv.Command(t, exe).CombinedOutput(); err != nil || len(out) != 0 {
++		t.Fatalf("Microsoft LINK CGo execution: %v\n%s", err, out)
++	}
++}
++
+ func TestWindowsMSVCSharedInitializer(t *testing.T) {
+ 	goTool := mustHaveMSVC(t)
+ 	testenv.MustHaveBuildMode(t, "c-shared")
+-- 
+2.54.0 (Apple Git-156)

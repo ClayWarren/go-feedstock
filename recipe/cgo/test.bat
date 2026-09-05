@@ -136,6 +136,9 @@ go test -list=. cmd/link/internal/ld > pe_link_tests.txt
 if errorlevel 1 exit /b 1
 go test -list=^^TestRemoveCgoLDFLAGS cmd/go/internal/work > cgo_flag_tests.txt
 if errorlevel 1 exit /b 1
+go test -list=^^TestScript$ cmd/go > cgo_script_tests.txt
+if errorlevel 1 exit /b 1
+if not exist "%GO_ROOT%\src\cmd\go\testdata\script\ldflag.txt" exit /b 1
 go test -list=^^TestReportsTypeErrors$ cmd/cgo/internal/testerrors > cgo_error_tests.txt
 if errorlevel 1 exit /b 1
 go test -list=^^TestMSVCVariableAddressGeneration$ cmd/cgo > cgo_variable_tests.txt
@@ -149,6 +152,7 @@ powershell -NoLogo -NoProfile -NonInteractive -Command ^
   "$loadTests = @(Get-Content -LiteralPath 'pe_load_tests.txt');" ^
   "$linkTests = @(Get-Content -LiteralPath 'pe_link_tests.txt');" ^
   "$flagTests = @(Get-Content -LiteralPath 'cgo_flag_tests.txt');" ^
+  "$scriptTests = @(Get-Content -LiteralPath 'cgo_script_tests.txt');" ^
   "$errorTests = @(Get-Content -LiteralPath 'cgo_error_tests.txt');" ^
   "$variableTests = @(Get-Content -LiteralPath 'cgo_variable_tests.txt');" ^
   "$runtimeTests = @(Get-Content -LiteralPath 'cgo_runtime_tests.txt');" ^
@@ -156,7 +160,7 @@ powershell -NoLogo -NoProfile -NonInteractive -Command ^
   "foreach ($name in @('TestExternalLinkReason', 'TestExternalLinkReasonStaticData')) {" ^
   "  if ($loadTests -cnotcontains $name) { $loadTests; throw ('Missing loader test: ' + $name) }" ^
   "};" ^
-  "foreach ($name in @('TestPEObjectLinkMode', 'TestPEObjectLinkModeForcedInternal', 'TestMSVCDebugFlags', 'TestDefaultExternalLinker', 'TestWindowsMSVCExternalDebugInfo', 'TestWindowsMSVCSharedInitializer', 'TestWindowsMSVCInternalLinkModes')) {" ^
+  "foreach ($name in @('TestPEObjectLinkMode', 'TestPEObjectLinkModeForcedInternal', 'TestWindowsGDBLinkerScript', 'TestMSVCDebugFlags', 'TestDefaultExternalLinker', 'TestWindowsMSVCExternalDebugInfo', 'TestWindowsMSVCLinkerNoGDBScript', 'TestWindowsMSVCSharedInitializer', 'TestWindowsMSVCInternalLinkModes')) {" ^
   "  if ($linkTests -cnotcontains $name) { $linkTests; throw ('Missing linker test: ' + $name) }" ^
   "};" ^
   "foreach ($name in @('TestRemoveCgoLDFLAGS', 'TestRemoveCgoLDFLAGSPreservesValidation')) {" ^
@@ -165,6 +169,7 @@ powershell -NoLogo -NoProfile -NonInteractive -Command ^
   "foreach ($name in @('TestMSVCCgoExternalLinkTarget', 'TestCgoCompilerArgs', 'TestMSVCCgoLinkRegistration')) {" ^
   "  if ($capabilityTests -cnotcontains $name) { $capabilityTests; throw ('Missing CGo capability test: ' + $name) }" ^
   "};" ^
+  "if ($scriptTests -cnotcontains 'TestScript') { $scriptTests; throw 'Missing Go command script tests' };" ^
   "if ($errorTests -cnotcontains 'TestReportsTypeErrors') { $errorTests; throw 'Missing CGo type-error tests' };" ^
   "if ($variableTests -cnotcontains 'TestMSVCVariableAddressGeneration') { $variableTests; throw 'Missing CGo variable-address tests' };" ^
   "if ($runtimeTests -cnotcontains 'TestIssue59213') { $runtimeTests; throw 'Missing Go DLL runtime test' }"
@@ -177,6 +182,8 @@ go test -count=1 -v -run=^^TestExternalLinkReason cmd/link/internal/loadpe
 if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 -v -run=^^TestPEObjectLinkMode cmd/link/internal/ld
 if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
+go test -count=1 -v -run=^^TestWindowsGDBLinkerScript$ cmd/link/internal/ld
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 -v -run=^^TestMSVCDebugFlags$ cmd/link/internal/ld
 if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 -v -run=^^TestDefaultExternalLinker$ cmd/link/internal/ld
@@ -188,6 +195,8 @@ if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 -v -run=^^TestCgoCompilerArgs$ internal/testenv
 if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 -v -run=^^TestRemoveCgoLDFLAGS cmd/go/internal/work
+if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
+go test -count=1 -v -run=^^TestScript$/^^ldflag$ cmd/go
 if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
 go test -count=1 -v -run=^^TestReportsTypeErrors$ cmd/cgo/internal/testerrors
 if errorlevel 1 set "GO_FOCUSED_TESTS_FAILED=1"
