@@ -54,6 +54,7 @@ jobs:
         run: |
           & .\ci\test_powershell51_types.ps1
           & .\recipe\nocgo\test_verify_fips_integrity.ps1
+          & .\ci\test_windows_api_initialization.ps1
 
       - name: Prove native PowerShell certificate lifetime
         shell: powershell
