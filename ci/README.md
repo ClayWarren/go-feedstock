@@ -5,6 +5,8 @@ This personal-fork branch starts from the green no-CGo validation at
 features that the internal linker cannot handle, while keeping supported
 static-data COMDATs eligible for internal linking. The CGo test script
 also uses the certificate-environment helper already validated by no-CGo.
+Patch 0017 corrects the issue 4054 enum reference to `C.II` and verifies
+all ten enum values in both halves of that existing CGo fixture.
 This is a separate CGo experiment, not an upstream PR update.
 
 The separate manual workflow on the fork's default branch takes an exact

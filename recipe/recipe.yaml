@@ -29,6 +29,7 @@ source:
       - patches/0014-Support-MSVC-target-CGo-shared-library-tests.patch
       - patches/0015-Require-CGo-for-FIPS-external-link-tests.patch
       - patches/0016-Select-external-linking-for-unsupported-ARM64-COFF.patch
+      - patches/0017-Fix-CGo-enum-fixture-reference.patch
 
   # Update this with a release from https://go.dev/dl/
   - if: build_platform == "linux-64"

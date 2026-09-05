@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ClayWarren <warren.clay@icloud.com>
+Date: Sat, 5 Sep 2026 00:00:00 +0000
+Subject: [PATCH] cmd/cgo/internal/test: use the issue 4054 enum member
+
+Both C declarations name the ninth enum member II, and the export-side
+Go reference already uses C.II. The definition-side reference still uses
+C.I, which resolves to the complex.h imaginary-unit macro instead. With
+MSVC-target Clang and UCRT this is a complex struct, so the integer slice
+does not compile.
+
+Use the declared enum member in both halves. Check all ten values in
+both slices to preserve the original cross-file enum regression and
+catch an accidental reference to a header macro.
+
+diff --git a/src/cmd/cgo/internal/test/test.go b/src/cmd/cgo/internal/test/test.go
+--- a/src/cmd/cgo/internal/test/test.go
++++ b/src/cmd/cgo/internal/test/test.go
+@@ -1489,7 +1489,7 @@ func testPrintf(t *testing.T) {
+ 
+ // issue 4054
+ 
+-var issue4054a = []int{C.A, C.B, C.C, C.D, C.E, C.F, C.G, C.H, C.I, C.J}
++var issue4054a = []int{C.A, C.B, C.C, C.D, C.E, C.F, C.G, C.H, C.II, C.J}
+ 
+ // issue 4339
+ 
+diff --git a/src/cmd/cgo/internal/test/issue4054_test.go b/src/cmd/cgo/internal/test/issue4054_test.go
+new file mode 100644
+--- /dev/null
++++ b/src/cmd/cgo/internal/test/issue4054_test.go
+@@ -0,0 +1,30 @@
++// Copyright 2026 The Go Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style
++// license that can be found in the LICENSE file.
++
++//go:build cgo
++
++package cgotest
++
++import "testing"
++
++func Test4054(t *testing.T) {
++	for _, tt := range []struct {
++		name   string
++		values []int
++	}{
++		{"definitions", issue4054a},
++		{"exports", issue4054b},
++	} {
++		t.Run(tt.name, func(t *testing.T) {
++			if len(tt.values) != 10 {
++				t.Fatalf("got %d enum values, want 10", len(tt.values))
++			}
++			for want, got := range tt.values {
++				if got != want {
++					t.Errorf("enum value %d = %d, want %d", want, got, want)
++				}
++			}
++		})
++	}
++}
