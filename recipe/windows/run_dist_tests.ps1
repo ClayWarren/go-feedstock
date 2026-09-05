@@ -187,8 +187,8 @@ try {
     # Read actual process and host architecture. Environment variables can be
     # scrubbed by rattler or describe an outer emulated shell. IsWow64Process2
     # is available on Windows 11 and works with Windows PowerShell 5.1.
-    [ushort] $processMachine = 0
-    [ushort] $nativeMachine = 0
+    [System.UInt16] $processMachine = 0
+    [System.UInt16] $nativeMachine = 0
     if (-not [GoFeedstockTemporaryTrust]::IsWow64Process2(
         [GoFeedstockTemporaryTrust]::GetCurrentProcess(), [ref] $processMachine, [ref] $nativeMachine)) {
         throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error())

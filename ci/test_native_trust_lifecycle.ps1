@@ -38,8 +38,8 @@ foreach ($name in @('Get-CertificateSha256', 'Get-GoFixtureRoot',
     . ([scriptblock]::Create($definition[0].Extent.Text))
 }
 Initialize-GoWindowsApi
-[ushort] $processMachine = 0
-[ushort] $nativeMachine = 0
+[System.UInt16] $processMachine = 0
+[System.UInt16] $nativeMachine = 0
 if (-not [GoFeedstockTemporaryTrust]::IsWow64Process2(
     [GoFeedstockTemporaryTrust]::GetCurrentProcess(), [ref] $processMachine, [ref] $nativeMachine)) {
     throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error())
