@@ -87,7 +87,17 @@ function Get-GoRootStoreState {
 function Initialize-GoWindowsApi {
     # CERT_STORE_ADD_NEW gives an atomic ownership decision: unlike X509Store.Add,
     # it cannot replace an entry that appeared after the read-only snapshot.
-    Add-Type -TypeDefinition @'
+    # Windows PowerShell 5.1's C# compiler reads LIB. Conda can set it to native
+    # library directories absent from this no-CGo test prefix. These framework-
+    # only declarations do not use that search path. Isolate just compilation,
+    # then restore LIB even if Add-Type fails; Go's environment is unchanged.
+    $savedLibraryPath = [Environment]::GetEnvironmentVariable('LIB', 'Process')
+    $clearLibraryPath = -not [string]::IsNullOrEmpty($savedLibraryPath)
+    try {
+        if ($clearLibraryPath) {
+            [Environment]::SetEnvironmentVariable('LIB', $null, 'Process')
+        }
+        Add-Type -ErrorAction Stop -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public static class GoFeedstockTemporaryTrust {
@@ -109,6 +119,11 @@ public static class GoFeedstockTemporaryTrust {
     public static extern bool CertFreeCertificateContext(IntPtr certificate);
 }
 '@
+    } finally {
+        if ($clearLibraryPath) {
+            [Environment]::SetEnvironmentVariable('LIB', $savedLibraryPath, 'Process')
+        }
+    }
 }
 
 function Invoke-GoTestsWithRoot {

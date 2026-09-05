@@ -117,6 +117,39 @@ Assert-Equal ([GoFeedstockTemporaryTrust].GetMethods().Name -contains 'CertAddCe
 Assert-Equal ([GoFeedstockTemporaryTrust].GetMethods().Name -contains 'IsWow64Process2') $true 'native architecture declaration compiles'
 Write-Host 'PASS native API declaration compilation; native methods were not invoked'
 
+# The initializer is defined in script scope, so install its compiler shim in
+# that same scope. No P/Invoke method or certificate store is used by this shim.
+$script:CompilerProbe = $null
+function Add-Type {
+    [CmdletBinding()]
+    param([string] $TypeDefinition)
+    Assert-Equal ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable('LIB', 'Process'))) $true 'compiler LIB isolation'
+    $script:CompilerProbe.Calls++
+    if ($script:CompilerProbe.CompilationFails) { throw 'simulated C# compilation failure' }
+}
+function Test-CompilerEnvironmentScope {
+    param([string] $LibraryPath, [bool] $CompilationFails)
+    $originalLibraryPath = [Environment]::GetEnvironmentVariable('LIB', 'Process')
+    $script:CompilerProbe = [pscustomobject]@{ Calls = 0; CompilationFails = $CompilationFails }
+    try {
+        [Environment]::SetEnvironmentVariable('LIB', $LibraryPath, 'Process')
+        $expectedLibraryPath = [Environment]::GetEnvironmentVariable('LIB', 'Process')
+        $failed = $false
+        try { Initialize-GoWindowsApi } catch { $failed = $true }
+        Assert-Equal $script:CompilerProbe.Calls 1 'compiler called with isolated LIB'
+        Assert-Equal $failed $CompilationFails 'compiler errors remain fatal'
+        Assert-Equal ([Environment]::GetEnvironmentVariable('LIB', 'Process')) $expectedLibraryPath 'LIB restored'
+    } finally {
+        [Environment]::SetEnvironmentVariable('LIB', $originalLibraryPath, 'Process')
+    }
+}
+foreach ($libraryPath in @($null, 'C:\missing conda prefix\Library\lib;C:\existing\lib')) {
+    Test-CompilerEnvironmentScope $libraryPath $false
+    Test-CompilerEnvironmentScope $libraryPath $true
+}
+Remove-Item Function:\Add-Type
+Write-Host 'PASS compiler LIB isolation and exact restoration after success/failure'
+
 $script:NativeCalls = [Collections.Generic.List[string]]::new()
 $script:FocusedExit = 0
 function Fake-Go {
