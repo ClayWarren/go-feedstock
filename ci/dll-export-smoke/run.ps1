@@ -34,10 +34,15 @@ function Assert-Arm64PE {
 }
 
 try {
-    $compiler = (Get-Command clang.exe -CommandType Application).Source
-    $dumpbin = (Get-Command dumpbin.exe -CommandType Application).Source
-    $mslink = (Get-Command link.exe -CommandType Application).Source
-    $lld = (Get-Command lld-link.exe -CommandType Application).Source
+    $compiler = @(Get-Command clang.exe -CommandType Application)[0].Source
+    $dumpbin = @(Get-Command dumpbin.exe -CommandType Application)[0].Source
+    $mslink = @(Get-Command link.exe -CommandType Application)[0].Source
+    $lld = @(Get-Command lld-link.exe -CommandType Application)[0].Source
+    $prefix = [IO.Path]::GetFullPath($env:CONDA_PREFIX) + [IO.Path]::DirectorySeparatorChar
+    if (-not $compiler.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or
+        -not $lld.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Compiler and LLD must come from the pinned conda environment.'
+    }
     Write-Host "Source revision: $env:GITHUB_SHA"
     Write-Host "Compiler: $compiler"
     Write-Host "Microsoft LINK: $mslink"
