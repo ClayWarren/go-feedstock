@@ -1,0 +1,14 @@
+[workspace]
+name = "arm64-dll-export-smoke"
+channels = ["conda-forge"]
+platforms = ["win-arm64"]
+
+[dependencies]
+clang_win-arm64 = { version = "==23.1", build = "hfb7d986_28" }
+clang-23 = { version = "==23.1.0", build = "default_h1628302_1" }
+vs2022_win-arm64 = { version = "==19.44.35207", build = "hc01aba5_41" }
+
+[activation.env]
+CONDA_BUILD = "1"
+build_platform = "win-arm64"
+target_platform = "win-arm64"
