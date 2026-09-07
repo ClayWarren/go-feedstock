@@ -1,0 +1,162 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ClayWarren <warren.clay@icloud.com>
+Date: Fri, 4 Sep 2026 00:00:00 +0000
+Subject: [PATCH] cmd/dist: respect cgo when testing FIPS link modes
+
+extLink reports whether a target supports external linking, not whether
+cgo is enabled for this test run. The FIPS external-link variants force
+CGO_ENABLED=1, so registering them in a CGO_ENABLED=0 run unexpectedly
+requires a C compiler, including on Windows ARM64.
+
+Require the tester's cgoEnabled setting before registering those variants.
+Keep internal-link coverage and the existing build-mode restrictions. Also
+replace the obsolete TestFIPSCheck filter with the current integrity test,
+TestIntegrityCheck, in all three FIPS link-mode registrations. Anchor the
+filter so each variant runs that check rather than matching unrelated tests.
+
+Add a regression covering both cgo settings and compile-only mode on
+Windows ARM64. Verify the integrity test exists and the registered commands
+select it, without invoking a compiler or executing target code.
+
+---
+diff --git a/src/cmd/dist/test.go b/src/cmd/dist/test.go
+index 66d8e4b8..f51d4a8d 100644
+--- a/src/cmd/dist/test.go
++++ b/src/cmd/dist/test.go
+@@ -938,7 +938,7 @@ func (t *tester) registerTests() {
+ 				ldflags:   "-linkmode=internal",
+ 				env:       []string{"CGO_ENABLED=0"},
+ 				pkg:       "crypto/internal/fips140test",
+-				runTests:  "TestFIPSCheck",
++				runTests:  "^TestIntegrityCheck$",
+ 			})
+ 		// Also test a cgo package.
+ 		if t.cgoEnabled && t.internalLink() && !disablePIE {
+@@ -953,7 +953,7 @@ func (t *tester) registerTests() {
+ 		}
+ 	}
+ 
+-	if t.extLink() && !t.compileOnly {
++	if t.cgoEnabled && t.extLink() && !t.compileOnly {
+ 		if goos != "android" { // Android does not support non-PIE linking
+ 			t.registerTest("external linking, -buildmode=exe",
+ 				&goTest{
+@@ -963,7 +963,7 @@ func (t *tester) registerTests() {
+ 					ldflags:   "-linkmode=external",
+ 					env:       []string{"CGO_ENABLED=1"},
+ 					pkg:       "crypto/internal/fips140test",
+-					runTests:  "TestFIPSCheck",
++					runTests:  "^TestIntegrityCheck$",
+ 				})
+ 		}
+ 		if t.externalLinkPIE() && !disablePIE {
+@@ -975,7 +975,7 @@ func (t *tester) registerTests() {
+ 					ldflags:   "-linkmode=external",
+ 					env:       []string{"CGO_ENABLED=1"},
+ 					pkg:       "crypto/internal/fips140test",
+-					runTests:  "TestFIPSCheck",
++					runTests:  "^TestIntegrityCheck$",
+ 				})
+ 		}
+ 	}
+diff --git a/src/cmd/dist/test_test.go b/src/cmd/dist/test_test.go
+new file mode 100644
+index 00000000..8d0e40c6
+--- /dev/null
++++ b/src/cmd/dist/test_test.go
+@@ -0,0 +1,95 @@
++// Copyright 2026 The Go Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style
++// license that can be found in the LICENSE file.
++
++package main
++
++import (
++	"fmt"
++	"go/ast"
++	"go/parser"
++	"go/token"
++	"path/filepath"
++	"runtime"
++	"slices"
++	"strings"
++	"testing"
++)
++
++func TestFIPSLinkRegistration(t *testing.T) {
++	defer func(o, a, ho, ha string) {
++		goos, goarch, gohostos, gohostarch = o, a, ho, ha
++	}(goos, goarch, gohostos, gohostarch)
++	goos, goarch = "windows", "arm64"
++	gohostos, gohostarch = goos, goarch
++	t.Setenv("GO_BUILDER_NAME", "")
++	t.Setenv("GO_TEST_SHARDS", "1")
++
++	const pkg = "crypto/internal/fips140test"
++	// Keep the registered filter tied to an existing test declaration.
++	file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(runtime.GOROOT(), "src", pkg, "check_test.go"), nil, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !slices.ContainsFunc(file.Decls, func(decl ast.Decl) bool {
++		fn, ok := decl.(*ast.FuncDecl)
++		return ok && fn.Recv == nil && fn.Name.Name == "TestIntegrityCheck"
++	}) {
++		t.Fatal("crypto/internal/fips140test has no TestIntegrityCheck test")
++	}
++
++	for _, cgo := range []bool{false, true} {
++		for _, compileOnly := range []bool{false, true} {
++			t.Run(fmt.Sprintf("cgo=%v/compileOnly=%v", cgo, compileOnly), func(t *testing.T) {
++				dt := tester{
++					cgoEnabled:  cgo,
++					compileOnly: compileOnly,
++					short:       true,
++					// Use the explicit-name path to avoid running go list.
++					runNames: []string{pkg + ":pie_internal"},
++				}
++				dt.registerTests()
++
++				// Internal linking and ordinary crypto coverage must remain
++				// available even when no C compiler is configured.
++				for _, name := range []string{
++					pkg + ":pie_internal",
++					"reflect:pie_internal",
++					"crypto/...:purego",
++					"crypto/...:gofips140",
++				} {
++					if !dt.testNames[name] {
++						t.Errorf("test %s was not registered", name)
++					}
++				}
++
++				wantExternal := cgo && !compileOnly
++				for _, variant := range []string{"exe_external", "pie_external"} {
++					name := pkg + ":" + variant
++					if got := dt.testNames[name]; got != wantExternal {
++						t.Errorf("test %s registered = %v; want %v", name, got, wantExternal)
++					}
++				}
++
++				// Build each registered FIPS command without running it. A
++				// stale test filter would silently execute no integrity check.
++				for _, test := range dt.tests {
++					if !strings.HasPrefix(test.name, pkg+":") {
++						continue
++					}
++					if err := test.fn(&test); err != nil {
++						t.Fatal(err)
++					}
++					args := dt.worklist[len(dt.worklist)-1].cmd.Args
++					if compileOnly {
++						if !slices.Contains(args, "-c") {
++							t.Errorf("test %s is not compile-only: %q", test.name, args)
++						}
++					} else if !slices.Contains(args, "-run=^TestIntegrityCheck$") {
++						t.Errorf("test %s does not select TestIntegrityCheck: %q", test.name, args)
++					}
++				}
++			})
++		}
++	}
++}

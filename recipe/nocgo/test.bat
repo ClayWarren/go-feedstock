@@ -1,10 +1,12 @@
 @echo on
 
-rem Put TMP on the same drive as the conda prefix (the D drive),
-rem to avoid a known issue in the go test suite:
+rem Keep the established win-64 same-drive workaround for the Go test suite.
 rem https://github.com/golang/go/issues/24846#issuecomment-381380628
-set TMP=%PREFIX%\tmp
-mkdir "%TMP%"
+rem Native win-arm64 runners provide TEMP and TMP with runner-owned ACLs.
+if /I not "%target_platform%"=="win-arm64" (
+  set "TMP=%PREFIX%\tmp"
+  mkdir "%PREFIX%\tmp"
+)
 
 
 rem Diagnostics
@@ -29,6 +31,7 @@ if errorlevel 1 exit 1
 goto :done
 
 :win_arm64_tests
+setlocal DisableDelayedExpansion
 rem cmd/dist resolves go and gofmt under GOROOT, while the conda package
 rem exposes them from PREFIX\bin. Restore the canonical layout only in this
 rem disposable test prefix.
@@ -42,12 +45,30 @@ if errorlevel 1 exit /b 1
 copy /Y "%PREFIX%\bin\gofmt.exe" "%GO_ROOT%\bin\gofmt.exe"
 if errorlevel 1 exit /b 1
 
-rem Retain the historically tolerated Windows diagnostics, but make the
-rem complementary expected-pass suite authoritative for win-arm64.
-go tool dist test -k -v -no-rebuild -run=^^go_test:os$ || cmd /K "exit /b 0"
-go tool dist test -k -v -no-rebuild -run=^^go_test:cmd/go$ || cmd /K "exit /b 0"
-go tool dist test -k -v -no-rebuild -run=^^go_test:cmd/gofmt$ || cmd /K "exit /b 0"
-go tool dist test -v -no-rebuild -run=!^^go_test:os^|go_test:cmd/go^|go_test:cmd/gofmt$
+rem vcweb changes USER and USERPROFILE for its fixtures. Use the runner's
+rem native Git, not the build tooling's MSYS2 Git and its POSIX ownership view.
+if not exist "%ProgramFiles%\Git\bin\git.exe" (
+  echo Native Git for Windows is required for the ARM64 package tests.
+  exit /b 1
+)
+set "PATH=%ProgramFiles%\Git\bin;%PATH%"
+where git
+git version --build-options
+if errorlevel 1 exit /b 1
+git --exec-path
+if errorlevel 1 exit /b 1
+
+rem Go 1.27 registers package names without the old go_test: prefix.
+rem Assert exact diagnostic names using line-aware reads, before allowing
+rem their failures. Print the list if an expected name is missing.
+go tool dist test -list > dist_tests.txt
+if errorlevel 1 exit /b 1
+powershell -NoLogo -NoProfile -NonInteractive -Command ^
+  "$ErrorActionPreference = 'Stop';" ^
+  "$tests = @(Get-Content -LiteralPath 'dist_tests.txt');" ^
+  "foreach ($name in @('os', 'cmd/go', 'cmd/gofmt')) {" ^
+  "  if ($tests -cnotcontains $name) { $tests; throw ('Missing dist test: ' + $name) }" ^
+  "}"
 if errorlevel 1 exit /b 1
 
 for /f "delims=" %%G in ('go env GOHOSTOS') do if /I not "%%G"=="windows" exit /b 1
@@ -68,6 +89,22 @@ powershell -NoLogo -NoProfile -NonInteractive -Command ^
   "$machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4);" ^
   "if ($machine -ne 0xaa64) { Write-Error ('expected PE Machine AA64, got 0x{0:X4}' -f $machine); exit 1 }"
 if errorlevel 1 exit /b 1
+
+rem Run the focused native checks before the longer standard-library suite.
+powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0verify_fips_integrity.ps1"
+if errorlevel 1 exit /b %ERRORLEVEL%
+
+rem Preserve only the existing Windows diagnostic exceptions, using actual
+rem package names. All remaining package and variant tests stay authoritative.
+go tool dist test -k -v -no-rebuild os cmd/go cmd/gofmt
+if errorlevel 1 echo Historical Windows diagnostic tests failed; see the log above.
+rem The unchanged suite needs the upstream SHA-384 fixture's public root.
+rem Opt in only on a disposable runner; the wrapper verifies native ARM64,
+rem respects explicit distrust, and removes only a root it temporarily adds.
+set "GO_TEST_ALLOW_TEMPORARY_USER_ROOT="
+if "%GITHUB_ACTIONS%"=="true" if "%RUNNER_ENVIRONMENT%"=="github-hosted" set "GO_TEST_ALLOW_TEMPORARY_USER_ROOT=1"
+powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0..\windows\run_dist_tests.ps1"
+if errorlevel 1 exit /b %ERRORLEVEL%
 
 :done
 exit /b 0
