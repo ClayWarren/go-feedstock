@@ -6,7 +6,6 @@ MSVC-target data references require dllimport and an import library;
 mutate that archive too, preserving the malformed PE import regression.
 Name the linker input .a, an archive suffix accepted by CGo's existing
 flag validation; the archive format remains MSVC and no allowlist changes.
-Retain the pristine archive for personal-fork diagnostic inspection.
 
 --- a/src/cmd/cgo/internal/testerrors/badsym_test.go
 +++ b/src/cmd/cgo/internal/testerrors/badsym_test.go
@@ -52,22 +51,9 @@ Retain the pristine archive for personal-fork diagnostic inspection.
 +		if msvc && arg == "-shared" {
 +			run = append(run, "-Wl,-implib:"+cImport)
 +		}
- 		t.Logf("BadSymbol fixture compiler: %q", run)
  		output, err := exec.Command(run[0], run[1:]...).CombinedOutput()
  		if err != nil {
-@@ -88,7 +106,11 @@
- 			if err := os.MkdirAll(capture, 0700); err != nil {
- 				t.Fatal(err)
- 			}
--			for _, original := range []string{src, out} {
-+			originals := []string{src, out}
-+			if msvc && arg == "-shared" {
-+				originals = append(originals, cImport)
-+			}
-+			for _, original := range originals {
- 				data, err := os.ReadFile(original)
- 				if err != nil {
- 					t.Fatal(err)
+ 			t.Log(run)
 @@ -151,7 +173,14 @@
  	cBadObj := filepath.Join(godir, "cbad.o")
  	rewrite(cObj, cBadObj)
