@@ -129,6 +129,11 @@ hello_win_arm64_external.exe
 if errorlevel 1 exit /b 1
 
 rem Keep the focused upstream CGo checks unmasked.
+rem Personal-fork diagnostic: capture the real, pristine compiler outputs.
+set "GO_TEST_BADSYMBOL_ARTIFACT_DIR=C:\bld\go-badsymbol-evidence"
+go test -count=1 -v -run=^^TestBadSymbol$ cmd/cgo/internal/testerrors
+if errorlevel 1 exit /b 1
+set "GO_TEST_BADSYMBOL_ARTIFACT_DIR="
 rem Require the patch's tests to exist before using a filtered Go test run.
 go test -list=^^TestExternalLinkReason cmd/link/internal/loadpe > pe_load_tests.txt
 if errorlevel 1 exit /b 1
