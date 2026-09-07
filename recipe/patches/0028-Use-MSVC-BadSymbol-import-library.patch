@@ -1,0 +1,84 @@
+From: ClayWarren <warren.clay@icloud.com>
+Subject: [PATCH] testerrors: use valid Windows BadSymbol linker inputs
+
+Use forward slashes in CGo directives to avoid backslash escape removal.
+MSVC-target data references require dllimport and an import library;
+mutate that archive too, preserving the malformed PE import regression.
+Retain the pristine archive for personal-fork diagnostic inspection.
+
+--- a/src/cmd/cgo/internal/testerrors/badsym_test.go
++++ b/src/cmd/cgo/internal/testerrors/badsym_test.go
+@@ -11,6 +11,7 @@
+ 	"os"
+ 	"os/exec"
+ 	"path/filepath"
++	"runtime"
+ 	"strings"
+ 	"testing"
+ 	"unicode"
+@@ -28,7 +29,11 @@
+ __declspec(dllexport)
+ #endif
+ int ` + cSymbol + " = 1;"
+-const cRefSource = "extern int " + cSymbol + "; int F() { return " + cSymbol + "; }"
++const cRefSource = `
++#ifdef _MSC_VER
++__declspec(dllimport)
++#endif
++extern int ` + cSymbol + "; int F() { return " + cSymbol + "; }"
+ 
+ // goSource is the source code for the trivial Go file we use.
+ // We will replace TMPDIR with the temporary directory name.
+@@ -73,10 +78,23 @@
+ 	cRefFile := makeFile(cdir, "cref.c", cRefSource)
+ 
+ 	ccCmd := cCompilerCmd(t)
++	msvc := false
++	if runtime.GOOS == "windows" {
++		probe := append(ccCmd, "-dM", "-E", "-x", "c", "-")
++		macros, err := exec.Command(probe[0], probe[1:]...).CombinedOutput()
++		if err != nil {
++			t.Fatalf("probing compiler target: %v\n%s", err, macros)
++		}
++		msvc = bytes.Contains(macros, []byte("#define _MSC_VER "))
++	}
++	cImport := filepath.Join(cdir, "c.lib")
+ 
+ 	cCompile := func(arg, base, src string) string {
+ 		out := filepath.Join(cdir, base)
+ 		run := append(ccCmd, arg, "-o", out, src)
++		if msvc && arg == "-shared" {
++			run = append(run, "-Wl,-implib:"+cImport)
++		}
+ 		t.Logf("BadSymbol fixture compiler: %q", run)
+ 		output, err := exec.Command(run[0], run[1:]...).CombinedOutput()
+ 		if err != nil {
+@@ -88,7 +106,11 @@
+ 			if err := os.MkdirAll(capture, 0700); err != nil {
+ 				t.Fatal(err)
+ 			}
+-			for _, original := range []string{src, out} {
++			originals := []string{src, out}
++			if msvc && arg == "-shared" {
++				originals = append(originals, cImport)
++			}
++			for _, original := range originals {
+ 				data, err := os.ReadFile(original)
+ 				if err != nil {
+ 					t.Fatal(err)
+@@ -151,7 +173,14 @@
+ 	cBadObj := filepath.Join(godir, "cbad.o")
+ 	rewrite(cObj, cBadObj)
+ 
+-	goSourceBadObject := strings.ReplaceAll(goSource, "TMPDIR", godir)
++	// CGo directive parsing treats backslashes as escapes.
++	goSourceBadObject := strings.ReplaceAll(goSource, "TMPDIR", filepath.ToSlash(godir))
++	if msvc {
++		// MSVC links an import library, not the DLL itself. Mutate the
++		// archive as well so the executable imports the malformed name.
++		rewrite(cImport, filepath.Join(godir, "cbad.lib"))
++		goSourceBadObject = strings.ReplaceAll(goSourceBadObject, "cbad.so", "cbad.lib")
++	}
+ 	makeFile(godir, "go.go", goSourceBadObject)
+ 
+ 	makeFile(godir, "go.mod", "module badsym")

@@ -40,6 +40,7 @@ source:
       - patches/0025-Keep-GNU-linker-scripts-away-from-Microsoft-LINK.patch
       - patches/0026-Capture-original-BadSymbol-fixtures.patch
       - patches/0027-Export-BadSymbol-fixture-with-MSVC.patch
+      - patches/0028-Use-MSVC-BadSymbol-import-library.patch
 
   # Update this with a release from https://go.dev/dl/
   - if: build_platform == "linux-64"

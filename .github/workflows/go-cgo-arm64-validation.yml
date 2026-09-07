@@ -108,7 +108,7 @@ jobs:
             Where-Object { $_.FullName -match 'Hostarm64\\arm64\\dumpbin.exe$' } |
             Select-Object -First 1
           if ($null -eq $dumpbin) { throw 'Native ARM64 dumpbin was not found.' }
-          foreach ($name in @('c.so', 'c.o')) {
+          foreach ($name in @('c.so', 'c.o', 'c.lib')) {
             $path = Join-Path $evidence $name
             if (Test-Path -LiteralPath $path) {
               & $dumpbin.FullName /headers /exports /symbols $path 2>&1 |
