@@ -4,6 +4,8 @@ Subject: [PATCH] testerrors: use valid Windows BadSymbol linker inputs
 Use forward slashes in CGo directives to avoid backslash escape removal.
 MSVC-target data references require dllimport and an import library;
 mutate that archive too, preserving the malformed PE import regression.
+Name the linker input .a, an archive suffix accepted by CGo's existing
+flag validation; the archive format remains MSVC and no allowlist changes.
 Retain the pristine archive for personal-fork diagnostic inspection.
 
 --- a/src/cmd/cgo/internal/testerrors/badsym_test.go
@@ -76,8 +78,8 @@ Retain the pristine archive for personal-fork diagnostic inspection.
 +	if msvc {
 +		// MSVC links an import library, not the DLL itself. Mutate the
 +		// archive as well so the executable imports the malformed name.
-+		rewrite(cImport, filepath.Join(godir, "cbad.lib"))
-+		goSourceBadObject = strings.ReplaceAll(goSourceBadObject, "cbad.so", "cbad.lib")
++		rewrite(cImport, filepath.Join(godir, "cbad.a"))
++		goSourceBadObject = strings.ReplaceAll(goSourceBadObject, "cbad.so", "cbad.a")
 +	}
  	makeFile(godir, "go.go", goSourceBadObject)
  
