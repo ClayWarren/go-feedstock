@@ -1,0 +1,23 @@
+From: ClayWarren <warren.clay@icloud.com>
+Subject: [PATCH] testerrors: export the BadSymbol fixture with MSVC
+
+The native ARM64 pristine fixture has no PE export directory: MSVC does
+not export an unannotated global by default. Export the definition only
+for MSVC targets. Keep symbol mutation and build rejection unchanged.
+
+diff --git a/src/cmd/cgo/internal/testerrors/badsym_test.go b/src/cmd/cgo/internal/testerrors/badsym_test.go
+--- a/src/cmd/cgo/internal/testerrors/badsym_test.go
++++ b/src/cmd/cgo/internal/testerrors/badsym_test.go
+@@ -24,7 +24,11 @@ const magicInput = "abcdefghijklmnopqrstuvwxyz0123"
+ const magicReplace = "\n//go:cgo_ldflag \"-badflag\"\n//"
+ 
+ const cSymbol = "BadSymbol" + magicInput + "Name"
+-const cDefSource = "int " + cSymbol + " = 1;"
++const cDefSource = `
++#ifdef _MSC_VER
++__declspec(dllexport)
++#endif
++int ` + cSymbol + " = 1;"
+ const cRefSource = "extern int " + cSymbol + "; int F() { return " + cSymbol + "; }"
+ 
+ // goSource is the source code for the trivial Go file we use.

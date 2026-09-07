@@ -39,6 +39,7 @@ source:
       - patches/0024-Resolve-MSVC-CGo-DLL-variable-addresses.patch
       - patches/0025-Keep-GNU-linker-scripts-away-from-Microsoft-LINK.patch
       - patches/0026-Capture-original-BadSymbol-fixtures.patch
+      - patches/0027-Export-BadSymbol-fixture-with-MSVC.patch
 
   # Update this with a release from https://go.dev/dl/
   - if: build_platform == "linux-64"
