@@ -129,6 +129,11 @@ hello_win_arm64_external.exe
 if errorlevel 1 exit /b 1
 
 rem Keep the focused upstream CGo checks unmasked.
+rem PERSONAL-FORK DIAGNOSIS ONLY: capture GCC68255 before the full suite.
+rem This branch is not a package-acceptance candidate and must not publish.
+powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0capture_gcc68255.ps1"
+exit /b %ERRORLEVEL%
+
 go test -count=1 -v -run=^^TestBadSymbol$ cmd/cgo/internal/testerrors > badsymbol_test.log 2>&1
 set "GO_BADSYMBOL_STATUS=%ERRORLEVEL%"
 type badsymbol_test.log

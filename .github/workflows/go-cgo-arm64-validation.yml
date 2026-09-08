@@ -1,6 +1,6 @@
 # Personal-fork diagnostic workflow. Do not include this in a feedstock PR.
-name: Go CGo native Windows ARM64 validation
-run-name: Go CGo ARM64 at ${{ inputs.source_sha }}
+name: Go GCC68255 native Windows ARM64 diagnosis
+run-name: GCC68255 ARM64 diagnosis at ${{ inputs.source_sha }}
 
 on:
   workflow_dispatch:
@@ -77,7 +77,7 @@ jobs:
           & .\ci\test_native_trust_lifecycle.ps1 -HelperPath .\recipe\windows\run_dist_tests.ps1 -GoRoot (Join-Path $bootstrap 'go')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build and test the native CGo packages without publishing
+      - name: Build Go and capture focused GCC68255 reproduction only
         shell: cmd
         env:
           CONFIG: win_arm64_cgotruego_variant_strcgo
@@ -94,34 +94,11 @@ jobs:
           set "sha=%TESTED_SOURCE_SHA%"
           call ".scripts\run_win_build.bat"
 
-      - name: Inspect pristine BadSymbol fixtures
-        if: always()
-        shell: powershell
-        run: |
-          $evidence = 'C:\bld\go-badsymbol-evidence'
-          if (-not (Test-Path -LiteralPath $evidence)) {
-            Write-Host 'No BadSymbol fixtures were captured; inspect the earlier failure.'
-            exit 0
-          }
-          Get-ChildItem -LiteralPath $evidence -File | Get-FileHash -Algorithm SHA256 | Format-Table -AutoSize
-          $dumpbin = Get-ChildItem 'C:\Program Files\Microsoft Visual Studio' -Filter dumpbin.exe -Recurse |
-            Where-Object { $_.FullName -match 'Hostarm64\\arm64\\dumpbin.exe$' } |
-            Select-Object -First 1
-          if ($null -eq $dumpbin) { throw 'Native ARM64 dumpbin was not found.' }
-          foreach ($name in @('c.so', 'c.o', 'c.lib')) {
-            $path = Join-Path $evidence $name
-            if (Test-Path -LiteralPath $path) {
-              & $dumpbin.FullName /headers /exports /symbols $path 2>&1 |
-                Tee-Object -FilePath (Join-Path $evidence ($name + '.dumpbin.txt'))
-              if ($LASTEXITCODE -ne 0) { throw "dumpbin failed for $name" }
-            }
-          }
-
-      - name: Retain pristine BadSymbol evidence
+      - name: Retain GCC68255 binaries and linker evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: badsymbol-pristine-${{ inputs.source_sha }}
-          path: C:\bld\go-badsymbol-evidence
-          if-no-files-found: warn
+          name: gcc68255-native-${{ inputs.source_sha }}
+          path: C:\bld\go-gcc68255-evidence
+          if-no-files-found: error
           retention-days: 14
