@@ -20,15 +20,9 @@ c_compiler:                 # [win and arm64]
 c_compiler_version:         # [win and arm64]
   - 23                      # [win and arm64]
 
-# Select the GO variants that we are building
-# The variant names, and versions come from
-# https://github.com/conda-forge/_go_select-feedstock/blob/main/recipe/conda_build_config.yaml
 go_variant_str:
   - cgo
   - nocgo
-go_variant_ver:
-  - 2.3.0
-  - 2.2.0
 
 # One-hot-encoding of the variant selection above
 cgo:
@@ -40,5 +34,4 @@ cgo:
 zip_keys:
   -
     - go_variant_str
-    - go_variant_ver
     - cgo
