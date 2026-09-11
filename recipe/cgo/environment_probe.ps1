@@ -14,8 +14,7 @@ where.exe git
 Write-Host "SSL_CERT_FILE=$env:SSL_CERT_FILE SSL_CERT_DIR=$env:SSL_CERT_DIR"
 $certArgs = @('test','-count=1','-v','-run=^Test(Go|System)Verify$/^SHA-384$','crypto/x509')
 $vcsArgs = @('test','-count=1','-timeout=5m','-v','cmd/go/internal/modfetch/codehost','cmd/go/internal/vcweb')
-Probe 'certificate-inherited' $certArgs
-Probe 'vcs-inherited' $vcsArgs
+# Inherited baselines are captured by the separate environment diagnostic.
 $oldFile = $env:SSL_CERT_FILE
 $oldDir = $env:SSL_CERT_DIR
 $oldPath = $env:PATH
@@ -46,5 +45,5 @@ try {
     Write-Host ('PROBE_RESULTS=' + ($results | ConvertTo-Json -Compress))
 }
 # This is a fork-only diagnostic. A success is not a full Go suite result.
-if ($results['certificate-system-store'] -ne 0 -or $results['vcs-native-git'] -ne 0) { exit 1 }
+if (@($results.Values | Where-Object { $_ -ne 0 }).Count -gt 0) { exit 1 }
 exit 0

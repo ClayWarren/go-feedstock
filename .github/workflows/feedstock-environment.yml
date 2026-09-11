@@ -1,7 +1,7 @@
-name: Go ARM64 feedstock environment diagnosis
+name: Go ARM64 CGo fixture diagnosis
 on:
   push:
-    branches: [codex/go339-feedstock-environment]
+    branches: [codex/go339-cgo-fixtures]
 permissions:
   contents: read
 jobs:
@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        config: [win_arm64_cgofalsego_variant_strnocgo, win_arm64_cgotruego_variant_strcgo]
+        config: [win_arm64_cgotruego_variant_strcgo]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Build recipe and probe installed test environment

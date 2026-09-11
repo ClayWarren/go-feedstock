@@ -1,0 +1,93 @@
+diff --git a/src/cmd/cgo/internal/test/test.go b/src/cmd/cgo/internal/test/test.go
+--- a/src/cmd/cgo/internal/test/test.go
++++ b/src/cmd/cgo/internal/test/test.go
+@@ -1466,7 +1466,7 @@
+ 
+ // issue 4054
+ 
+-var issue4054a = []int{C.A, C.B, C.C, C.D, C.E, C.F, C.G, C.H, C.I, C.J}
++var issue4054a = []int{C.A, C.B, C.C, C.D, C.E, C.F, C.G, C.H, C.II, C.J}
+ 
+ // issue 4339
+ 
+diff --git a/src/cmd/cgo/internal/testerrors/badsym_test.go b/src/cmd/cgo/internal/testerrors/badsym_test.go
+--- a/src/cmd/cgo/internal/testerrors/badsym_test.go
++++ b/src/cmd/cgo/internal/testerrors/badsym_test.go
+@@ -23,7 +23,7 @@
+ const magicReplace = "\n//go:cgo_ldflag \"-badflag\"\n//"
+ 
+ const cSymbol = "BadSymbol" + magicInput + "Name"
+-const cDefSource = "int " + cSymbol + " = 1;"
++const cDefSource = "#ifdef _WIN32\n__declspec(dllexport)\n#endif\nint " + cSymbol + " = 1;"
+ const cRefSource = "extern int " + cSymbol + "; int F() { return " + cSymbol + "; }"
+ 
+ // goSource is the source code for the trivial Go file we use.
+diff --git a/src/cmd/cgo/internal/testso/testdata/so/cgoso.c b/src/cmd/cgo/internal/testso/testdata/so/cgoso.c
+--- a/src/cmd/cgo/internal/testso/testdata/so/cgoso.c
++++ b/src/cmd/cgo/internal/testso/testdata/so/cgoso.c
+@@ -4,7 +4,7 @@
+ 
+ #include "_cgo_export.h"
+ 
+-#if defined(WIN32) || defined(_AIX)
++#if defined(_WIN32) || defined(_AIX)
+ extern void setCallback(void *);
+ void init() {
+ 	setCallback(goCallback);
+diff --git a/src/cmd/cgo/internal/testso/testdata/so/cgoso_c.c b/src/cmd/cgo/internal/testso/testdata/so/cgoso_c.c
+--- a/src/cmd/cgo/internal/testso/testdata/so/cgoso_c.c
++++ b/src/cmd/cgo/internal/testso/testdata/so/cgoso_c.c
+@@ -4,7 +4,7 @@
+ 
+ //go:build ignore
+ 
+-#ifdef WIN32
++#ifdef _WIN32
+ // A Windows DLL is unable to call an arbitrary function in
+ // the main executable. Work around that by making the main
+ // executable pass the callback function pointer to us.
+diff --git a/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.h b/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.h
+--- a/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.h
++++ b/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.h
+@@ -4,7 +4,7 @@
+ 
+ //go:build ignore
+ 
+-#ifdef WIN32
++#ifdef _WIN32
+ #if defined(EXPORT_DLL)
+ #    define VAR __declspec(dllexport)
+ #elif defined(IMPORT_DLL)
+diff --git a/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.c b/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.c
+--- a/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.c
++++ b/src/cmd/cgo/internal/testso/testdata/sovar/cgoso_c.c
+@@ -4,4 +4,6 @@
+ 
+ //go:build ignore
+ 
++#include "cgoso_c.h"
++
+ const char *exported_var = "Hello world";
+diff --git a/src/cmd/cgo/internal/testso/so_test.go b/src/cmd/cgo/internal/testso/so_test.go
+--- a/src/cmd/cgo/internal/testso/so_test.go
++++ b/src/cmd/cgo/internal/testso/so_test.go
+@@ -78,7 +78,18 @@
+ 		// At least in mingw-clang it is not permitted to just name a .dll
+ 		// on the command line. You must name the corresponding import
+ 		// library instead, even though the dll is used when the executable is run.
+-		args = append(args, "-Wl,-out-implib,libcgosotest.a")
++		// Determine the compiler ABI, not just its executable name.
++		probe := exec.Command(cc, append(gogccflags, "-dM", "-E", "-")...)
++		probe.Stdin = strings.NewReader("")
++		macros, err := probe.CombinedOutput()
++		if err != nil {
++			t.Fatalf("compiler macro probe: %v\n%s", err, macros)
++		}
++		if strings.Contains(string(macros), "#define _MSC_VER ") {
++			args = append(args, "-Wl,/implib:libcgosotest.a")
++		} else {
++			args = append(args, "-Wl,-out-implib,libcgosotest.a")
++		}
+ 	case "aix":
+ 		ext = "so.1"
+ 	}
