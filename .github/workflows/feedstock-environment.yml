@@ -1,7 +1,7 @@
-name: Go ARM64 CGo linker flag diagnosis
+name: Go ARM64 import-library diagnosis
 on:
   push:
-    branches: [codex/go339-linker-flags]
+    branches: [codex/go339-import-library]
 permissions:
   contents: read
 jobs:

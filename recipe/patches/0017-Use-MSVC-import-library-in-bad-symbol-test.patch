@@ -1,0 +1,47 @@
+diff --git a/src/cmd/cgo/internal/testerrors/badsym_test.go b/src/cmd/cgo/internal/testerrors/badsym_test.go
+--- a/src/cmd/cgo/internal/testerrors/badsym_test.go
++++ b/src/cmd/cgo/internal/testerrors/badsym_test.go
+@@ -24,7 +24,7 @@
+ 
+ const cSymbol = "BadSymbol" + magicInput + "Name"
+ const cDefSource = "#ifdef _WIN32\n__declspec(dllexport)\n#endif\nint " + cSymbol + " = 1;"
+-const cRefSource = "extern int " + cSymbol + "; int F() { return " + cSymbol + "; }"
++const cRefSource = "#ifdef _WIN32\n__declspec(dllimport)\n#endif\nextern int " + cSymbol + "; int F() { return " + cSymbol + "; }"
+ 
+ // goSource is the source code for the trivial Go file we use.
+ // We will replace TMPDIR with the temporary directory name.
+@@ -69,10 +69,20 @@
+ 	cRefFile := makeFile(cdir, "cref.c", cRefSource)
+ 
+ 	ccCmd := cCompilerCmd(t)
++	probe := exec.Command(ccCmd[0], append(append([]string{}, ccCmd[1:]...), "-dumpmachine")...)
++	target, err := probe.Output()
++	if err != nil {
++		t.Fatalf("compiler target probe: %v", err)
++	}
++	msvc := strings.Contains(string(target), "windows-msvc")
++	importLib := filepath.Join(cdir, "c.lib")
+ 
+ 	cCompile := func(arg, base, src string) string {
+ 		out := filepath.Join(cdir, base)
+-		run := append(ccCmd, arg, "-o", out, src)
++		run := append(append([]string{}, ccCmd...), arg, "-o", out, src)
++		if msvc && arg == "-shared" {
++			run = append(run, "-Wl,/implib:"+importLib)
++		}
+ 		output, err := exec.Command(run[0], run[1:]...).CombinedOutput()
+ 		if err != nil {
+ 			t.Log(run)
+@@ -131,6 +141,12 @@
+ 	rewrite(cObj, cBadObj)
+ 
+ 	goSourceBadObject := strings.ReplaceAll(goSource, "TMPDIR", filepath.ToSlash(godir))
++	if msvc {
++		// MSVC linkers consume an import library rather than a DLL directly.
++		// Mutate its symbol names too, preserving the original regression.
++		rewrite(importLib, filepath.Join(godir, "cbad.lib"))
++		goSourceBadObject = strings.ReplaceAll(goSourceBadObject, "/cbad.so", "/cbad.lib")
++	}
+ 	makeFile(godir, "go.go", goSourceBadObject)
+ 
+ 	makeFile(godir, "go.mod", "module badsym")
