@@ -1,7 +1,7 @@
-name: Go ARM64 dynamic-import trace
+name: Go ARM64 dynamic-import marker fix
 on:
   push:
-    branches: [codex/go339-dynimport-trace]
+    branches: [codex/go339-marker-fix]
 permissions:
   contents: read
 jobs:
@@ -37,6 +37,6 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: go-arm64-diagnostic-packages
-          path: C:\bld\**\*.conda
+          path: C:\bld\win-arm64\*.conda
           if-no-files-found: warn
           retention-days: 7
