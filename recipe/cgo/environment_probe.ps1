@@ -1,5 +1,8 @@
 $ErrorActionPreference = 'Stop'
 $results = [ordered]@{}
+# Preserve packages before failed-test cleanup removes the build output.
+New-Item -ItemType Directory -Force C:\go-diagnostics | Out-Null
+Copy-Item C:\bld\win-arm64\go-*.conda C:\go-diagnostics -ErrorAction Stop
 $env:GO_CF_TRACE_DYNIMPORT = '1'
 function Probe([string]$Name, [string[]]$GoArgs) {
     Write-Host "BEGIN_PROBE=$Name"

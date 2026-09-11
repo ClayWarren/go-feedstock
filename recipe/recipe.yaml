@@ -33,6 +33,7 @@ source:
       - patches/0017-Use-MSVC-import-library-in-bad-symbol-test.patch
       - patches/0018-Capture-dynamic-import-link-failures.patch
       - patches/0019-Keep-link-mode-marker-out-of-dynimport-link.patch
+      - patches/0020-Resolve-MSVC-DLL-variable-imports.patch
 
   # Update this with a release from https://go.dev/dl/
   - if: build_platform == "linux-64"

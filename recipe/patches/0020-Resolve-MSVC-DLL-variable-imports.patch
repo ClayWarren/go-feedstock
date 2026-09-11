@@ -1,0 +1,199 @@
+diff --git a/src/cmd/cgo/main.go b/src/cmd/cgo/main.go
+--- a/src/cmd/cgo/main.go
++++ b/src/cmd/cgo/main.go
+@@ -76,6 +76,8 @@
+ 	NoEscapes   map[string]bool     // C function names with #cgo noescape directive
+ 	Edit        *edit.Buffer
+ 
++	MSVC bool // C compiler targets the MSVC ABI.
++
+ 	debugs []*debug // debug data from iterations of gccDebug. Initialized by File.loadDebug.
+ }
+ 
+@@ -115,15 +117,16 @@
+ 
+ // A Name collects information about C.xxx.
+ type Name struct {
+-	Go       string // name used in Go referring to package C
+-	Mangle   string // name used in generated Go
+-	C        string // name used in C
+-	Define   string // #define expansion
+-	Kind     string // one of the nameKinds
+-	Type     *Type  // the type of xxx
+-	FuncType *FuncType
+-	AddError bool
+-	Const    string // constant definition
++	Go        string // name used in Go referring to package C
++	Mangle    string // name used in generated Go
++	C         string // name used in C
++	Define    string // #define expansion
++	Kind      string // one of the nameKinds
++	Type      *Type  // the type of xxx
++	FuncType  *FuncType
++	AddError  bool
++	Const     string // constant definition
++	DLLImport string // COFF import-address symbol for a DLL variable
+ }
+ 
+ // IsVar reports whether Kind is either "var" or "fpvar"
+diff --git a/src/cmd/cgo/gcc.go b/src/cmd/cgo/gcc.go
+--- a/src/cmd/cgo/gcc.go
++++ b/src/cmd/cgo/gcc.go
+@@ -235,11 +235,71 @@
+ 		p.recordTypes(f, d, &conv)
+ 	}
+ 	p.prepareNames(f)
++	p.loadDLLImports(f)
+ 	if p.rewriteCalls(f) {
+ 		// Add `import _cgo_unsafe "unsafe"` after the package statement.
+ 		f.Edit.Insert(f.offset(f.AST.Name.End()), "; import _cgo_unsafe \"unsafe\"")
+ 	}
+ 	p.rewriteRef(f)
++}
++
++// loadDLLImports identifies DLL data through the compiler's address relocations.
++// An MSVC import library defines an import-address slot rather than the data
++// symbol itself. Ordinary globals must continue to use their direct address.
++func (p *Package) loadDLLImports(f *File) {
++	if !f.MSVC || *gccgo || goos != "windows" || (goarch != "arm64" && goarch != "amd64") {
++		return
++	}
++	var names []*Name
++	var b bytes.Buffer
++	b.WriteString(builtinProlog)
++	b.WriteString(f.Preamble)
++	b.WriteByte('\n')
++	for _, key := range nameKeys(f.Name) {
++		n := f.Name[key]
++		if n.Kind != "var" {
++			continue
++		}
++		fmt.Fprintf(&b, "void *__cgo_dllimport_%d(void) { return (void *)&%s; }\n", len(names), n.C)
++		names = append(names, n)
++	}
++	if len(names) == 0 {
++		return
++	}
++	ofile := gccTmp()
++	defer os.Remove(ofile)
++	args := p.gccCmd(ofile)
++	// Give each probe its own section so unrelated preamble references cannot
++	// cause a local global to be mistaken for DLL data.
++	args = append(args[:len(args)-1], "-O0", "-ffunction-sections", "-")
++	runGcc(b.Bytes(), args)
++	obj, err := pe.Open(ofile)
++	if err != nil {
++		fatalf("cannot read DLL variable probe: %v", err)
++	}
++	defer obj.Close()
++	for _, sym := range obj.Symbols {
++		index, ok := strings.CutPrefix(sym.Name, "__cgo_dllimport_")
++		if !ok {
++			continue
++		}
++		i, err := strconv.Atoi(index)
++		if err != nil || i < 0 || i >= len(names) || sym.SectionNumber <= 0 || int(sym.SectionNumber) > len(obj.Sections) {
++			fatalf("invalid DLL variable probe symbol %q", sym.Name)
++		}
++		for _, reloc := range obj.Sections[sym.SectionNumber-1].Relocs {
++			if int(reloc.SymbolTableIndex) >= len(obj.COFFSymbols) {
++				fatalf("invalid DLL variable probe relocation")
++			}
++			target, err := obj.COFFSymbols[reloc.SymbolTableIndex].FullName(obj.StringTable)
++			if err != nil {
++				fatalf("cannot read DLL variable probe relocation: %v", err)
++			}
++			if target == "__imp_"+names[i].C {
++				names[i].DLLImport = target
++			}
++		}
++	}
+ }
+ 
+ // loadDefines coerces gcc into spitting out the #defines in use
+@@ -271,6 +331,10 @@
+ 		} else {
+ 			key = line[0:tabIndex]
+ 			val = strings.TrimSpace(line[tabIndex:])
++		}
++
++		if key == "_MSC_VER" {
++			f.MSVC = true
+ 		}
+ 
+ 		if key == "__clang__" {
+diff --git a/src/cmd/cgo/out.go b/src/cmd/cgo/out.go
+--- a/src/cmd/cgo/out.go
++++ b/src/cmd/cgo/out.go
+@@ -188,13 +188,20 @@
+ 				// (Link Time Optimization).
+ 				if n.Kind == "fpvar" {
+ 					fmt.Fprintf(fm, "extern void %s();\n", n.C)
++				} else if n.DLLImport != "" {
++					fmt.Fprintf(fm, "extern void *%s;\n", n.DLLImport)
++					fmt.Fprintf(fm, "void *_cgohack_%s = &%s;\n\n", n.C, n.DLLImport)
+ 				} else {
+ 					fmt.Fprintf(fm, "extern char %s[];\n", n.C)
+ 					fmt.Fprintf(fm, "void *_cgohack_%s = %s;\n\n", n.C, n.C)
+ 				}
+-				fmt.Fprintf(fgo2, "//go:linkname __cgo_%s %s\n", n.C, n.C)
+-				fmt.Fprintf(fgo2, "//go:cgo_import_static %s\n", n.C)
+-				fmt.Fprintf(fgo2, "var __cgo_%s byte\n", n.C)
++				symbol, typ := n.C, "byte"
++				if n.DLLImport != "" {
++					symbol, typ = n.DLLImport, "unsafe.Pointer"
++				}
++				fmt.Fprintf(fgo2, "//go:linkname __cgo_%s %s\n", n.C, symbol)
++				fmt.Fprintf(fgo2, "//go:cgo_import_static %s\n", symbol)
++				fmt.Fprintf(fgo2, "var __cgo_%s %s\n", n.C, typ)
+ 			}
+ 			cVars[n.C] = true
+ 		}
+@@ -218,7 +225,11 @@
+ 		if !*gccgo {
+ 			fmt.Fprintf(fgo2, " = (")
+ 			conf.Fprint(fgo2, fset, node)
+-			fmt.Fprintf(fgo2, ")(unsafe.Pointer(&__cgo_%s))", n.C)
++			if n.DLLImport != "" {
++				fmt.Fprintf(fgo2, ")(__cgo_%s)", n.C)
++			} else {
++				fmt.Fprintf(fgo2, ")(unsafe.Pointer(&__cgo_%s))", n.C)
++			}
+ 		}
+ 		fmt.Fprintf(fgo2, "\n")
+ 	}
+diff --git a/src/cmd/cgo/internal/testso/testdata/sovar/cgoso.go b/src/cmd/cgo/internal/testso/testdata/sovar/cgoso.go
+--- a/src/cmd/cgo/internal/testso/testdata/sovar/cgoso.go
++++ b/src/cmd/cgo/internal/testso/testdata/sovar/cgoso.go
+@@ -23,6 +23,11 @@
+ 
+ #include "cgoso_c.h"
+ 
++int local_var;
++const char** getVarAddr() { return &exported_var; }
++void setVar() { exported_var = "changed in C"; }
++int getLocal() { return local_var; }
++
+ const char* getVar() {
+ 	    return exported_var;
+ }
+@@ -41,4 +46,19 @@
+ 	if got != want {
+ 		panic(fmt.Sprintf("testExportedVar: got %q, but want %q", got, want))
+ 	}
++	if &C.exported_var != C.getVarAddr() {
++		panic("DLL variable address differs between Go and C")
++	}
++	C.exported_var = nil
++	if C.getVar() != nil {
++		panic("C did not observe Go's DLL variable write")
++	}
++	C.setVar()
++	if got := C.GoString(C.exported_var); got != "changed in C" {
++		panic(fmt.Sprintf("Go did not observe C's DLL variable write: %q", got))
++	}
++	C.local_var = 42
++	if C.getLocal() != 42 {
++		panic("ordinary C global access failed")
++	}
+ }
