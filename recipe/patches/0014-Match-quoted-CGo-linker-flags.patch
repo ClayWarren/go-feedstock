@@ -1,0 +1,88 @@
+diff --git a/src/cmd/go/internal/work/exec.go b/src/cmd/go/internal/work/exec.go
+--- a/src/cmd/go/internal/work/exec.go
++++ b/src/cmd/go/internal/work/exec.go
+@@ -3139,6 +3139,25 @@
+ 	return nil
+ }
+ 
++// removeCgoLDFLAGS removes only the contiguous flags supplied to the cgo action.
++// cgo emits these with %q, and the compiler strips quotes without unescaping.
++// Compare against that same representation, including escaped Windows paths.
++func removeCgoLDFLAGS(flags, trusted []string) []string {
++	if len(trusted) == 0 {
++		return flags
++	}
++	encoded := make([]string, len(trusted))
++	for i, flag := range trusted {
++		encoded[i] = strings.Trim(strconv.Quote(flag), `"`)
++	}
++	for i := 0; i+len(encoded) <= len(flags); i++ {
++		if slices.Equal(flags[i:i+len(encoded)], encoded) {
++			return append(flags[:i], flags[i+len(encoded):]...)
++		}
++	}
++	return flags
++}
++
+ func (b *Builder) processCgoOutputs(a *Action, runCgoProvider *runCgoProvider, cgoExe, objdir string) (outGo, outObj []string, err error) {
+ 	outGo = slices.Clip(runCgoProvider.goFiles)
+ 
+@@ -3256,19 +3275,7 @@
+ 			}
+ 		}
+ 
+-		// We expect to find the contents of cgoLDFLAGS used when running the CGO action in flags.
+-		if len(runCgoProvider.LDFLAGS) > 0 {
+-		outer:
+-			for i := range flags {
+-				for j, f := range runCgoProvider.LDFLAGS {
+-					if f != flags[i+j] {
+-						continue outer
+-					}
+-				}
+-				flags = append(flags[:i], flags[i+len(runCgoProvider.LDFLAGS):]...)
+-				break
+-			}
+-		}
++		flags = removeCgoLDFLAGS(flags, runCgoProvider.LDFLAGS)
+ 
+ 		if err := checkLinkerFlags("LDFLAGS", "go:cgo_ldflag", flags); err != nil {
+ 			return nil, nil, err
+diff --git a/src/cmd/go/internal/work/cgo_ldflags_test.go b/src/cmd/go/internal/work/cgo_ldflags_test.go
+--- /dev/null
++++ b/src/cmd/go/internal/work/cgo_ldflags_test.go
+@@ -0,0 +1,34 @@
++// Copyright 2026 The Go Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style
++// license that can be found in the LICENSE file.
++
++package work
++
++import (
++	"slices"
++	"testing"
++)
++
++func TestRemoveCgoLDFLAGS(t *testing.T) {
++	tests := []struct {
++		name                 string
++		flags, trusted, want []string
++	}{
++		{"windows path", []string{"-nostdlib", `-LC:\\test\\lib`, "-badflag"}, []string{"-nostdlib", `-LC:\test\lib`}, []string{"-badflag"}},
++		{"partial suffix", []string{"-nostdlib"}, []string{"-nostdlib", "-lm"}, []string{"-nostdlib"}},
++		{"injected flag", []string{"-nostdlib", "-badflag", "-lm"}, []string{"-nostdlib", "-lm"}, []string{"-nostdlib", "-badflag", "-lm"}},
++		{"duplicate", []string{"-nostdlib", "-nostdlib"}, []string{"-nostdlib"}, []string{"-nostdlib"}},
++		{"empty", []string{"-badflag"}, nil, []string{"-badflag"}},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			got := removeCgoLDFLAGS(slices.Clone(tt.flags), tt.trusted)
++			if !slices.Equal(got, tt.want) {
++				t.Fatalf("got %q; want %q", got, tt.want)
++			}
++			if slices.Contains(got, "-badflag") && checkLinkerFlags("LDFLAGS", "test", got) == nil {
++				t.Fatal("unexpectedly accepted injected flag")
++			}
++		})
++	}
++}

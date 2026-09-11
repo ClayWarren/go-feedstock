@@ -1,0 +1,22 @@
+diff --git a/src/cmd/go/internal/vcweb/hg.go b/src/cmd/go/internal/vcweb/hg.go
+--- a/src/cmd/go/internal/vcweb/hg.go
++++ b/src/cmd/go/internal/vcweb/hg.go
+@@ -99,7 +99,7 @@
+ 		}
+ 
+ 		logger.Printf("starting hg serve for %s", dir)
+-		cmd := exec.CommandContext(h.ctx, h.hgPath, "serve", "--port", "0", "--address", "localhost", "--accesslog", os.DevNull, "--name", "vcweb", "--print-url")
++		cmd := exec.CommandContext(h.ctx, h.hgPath, "serve", "--port", "0", "--address", "127.0.0.1", "--accesslog", os.DevNull, "--name", "vcweb", "--print-url")
+ 		cmd.Dir = dir
+ 		cmd.Env = append(slices.Clip(env), "PWD="+dir)
+ 
+@@ -163,6 +163,9 @@
+ 			return
+ 		}
+ 
++		// Mercurial may advertise a hostname resolving outside the loopback bind.
++		u.Host = "127.0.0.1:" + u.Port()
++
+ 		if h.url == nil {
+ 			h.url = make(map[string]*url.URL)
+ 		}

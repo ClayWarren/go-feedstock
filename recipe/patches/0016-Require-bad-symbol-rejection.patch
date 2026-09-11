@@ -1,0 +1,22 @@
+diff --git a/src/cmd/cgo/internal/testerrors/badsym_test.go b/src/cmd/cgo/internal/testerrors/badsym_test.go
+--- a/src/cmd/cgo/internal/testerrors/badsym_test.go
++++ b/src/cmd/cgo/internal/testerrors/badsym_test.go
+@@ -130,7 +130,7 @@
+ 	cBadObj := filepath.Join(godir, "cbad.o")
+ 	rewrite(cObj, cBadObj)
+ 
+-	goSourceBadObject := strings.ReplaceAll(goSource, "TMPDIR", godir)
++	goSourceBadObject := strings.ReplaceAll(goSource, "TMPDIR", filepath.ToSlash(godir))
+ 	makeFile(godir, "go.go", goSourceBadObject)
+ 
+ 	makeFile(godir, "go.mod", "module badsym")
+@@ -149,6 +149,9 @@
+ 	}
+ 
+ 	t.Logf("%s", output)
++	if !bytes.Contains(output, []byte("dynamic symbol")) || !bytes.Contains(output, []byte("contains unsupported character")) {
++		t.Fatal("did not reach the intended dynamic-symbol rejection")
++	}
+ 
+ 	for _, line := range bytes.Split(output, []byte("\n")) {
+ 		if bytes.Contains(line, []byte("dynamic symbol")) && bytes.Contains(line, []byte("contains unsupported character")) {

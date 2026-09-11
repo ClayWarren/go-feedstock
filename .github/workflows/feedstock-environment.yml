@@ -1,7 +1,7 @@
-name: Go ARM64 CGo fixture diagnosis
+name: Go ARM64 CGo linker flag diagnosis
 on:
   push:
-    branches: [codex/go339-cgo-fixtures]
+    branches: [codex/go339-linker-flags]
 permissions:
   contents: read
 jobs:

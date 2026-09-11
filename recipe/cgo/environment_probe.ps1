@@ -34,6 +34,8 @@ try {
     }
     Write-Host 'DIST_SELECTION_NAMES_VERIFIED=os,cmd/go,cmd/gofmt'
     if ((& go env CGO_ENABLED) -eq '1') {
+        clang.exe --version
+        Probe 'cgo-flag-security' @('test','-count=1','-v','-run=^Test(RemoveCgoLDFLAGS|CondaLinkerFlagScope|CheckLinkerFlags)$','cmd/go/internal/work')
         Probe 'cgo-badsymbol' @('test','-count=1','-timeout=5m','-v','-run=^TestBadSymbol$','cmd/cgo/internal/testerrors')
         Probe 'cgo-srcimporter' @('test','-count=1','-timeout=5m','-v','-run=^TestCgo$','go/internal/srcimporter')
         Probe 'cgo-shared-fixtures' @('test','-count=1','-timeout=5m','-v','-run=^Test(SO|SOVar)$','cmd/cgo/internal/testso')
