@@ -20,7 +20,7 @@ diff --git a/src/cmd/cgo/internal/testerrors/badsym_test.go b/src/cmd/cgo/intern
 +		t.Fatalf("compiler target probe: %v", err)
 +	}
 +	msvc := strings.Contains(string(target), "windows-msvc")
-+	importLib := filepath.Join(cdir, "c.lib")
++	importLib := filepath.Join(cdir, "c.a")
  
  	cCompile := func(arg, base, src string) string {
  		out := filepath.Join(cdir, base)
@@ -39,8 +39,8 @@ diff --git a/src/cmd/cgo/internal/testerrors/badsym_test.go b/src/cmd/cgo/intern
 +	if msvc {
 +		// MSVC linkers consume an import library rather than a DLL directly.
 +		// Mutate its symbol names too, preserving the original regression.
-+		rewrite(importLib, filepath.Join(godir, "cbad.lib"))
-+		goSourceBadObject = strings.ReplaceAll(goSourceBadObject, "/cbad.so", "/cbad.lib")
++		rewrite(importLib, filepath.Join(godir, "cbad.a"))
++		goSourceBadObject = strings.ReplaceAll(goSourceBadObject, "/cbad.so", "/cbad.a")
 +	}
  	makeFile(godir, "go.go", goSourceBadObject)
  
