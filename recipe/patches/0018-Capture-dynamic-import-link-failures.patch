@@ -1,0 +1,47 @@
+diff --git a/src/cmd/go/internal/work/exec.go b/src/cmd/go/internal/work/exec.go
+--- a/src/cmd/go/internal/work/exec.go
++++ b/src/cmd/go/internal/work/exec.go
+@@ -2421,7 +2421,10 @@
+ 	}
+ 
+ 	cmdargs := []any{cmd, "-o", outfile, objs, flags}
+-	_, err := sh.runOut(base.Cwd(), b.cCompilerEnv(), cmdargs...)
++	output, err := sh.runOut(base.Cwd(), b.cCompilerEnv(), cmdargs...)
++	if os.Getenv("GO_CF_TRACE_DYNIMPORT") == "1" {
++		fmt.Fprintf(os.Stderr, "CF_DYNIMPORT package=%s error=%v\n%s\n", p.ImportPath, err, output)
++	}
+ 
+ 	// Note that failure is an expected outcome here, so we report output only
+ 	// in debug mode and don't report the error.
+diff --git a/src/cmd/cgo/internal/testerrors/badsym_test.go b/src/cmd/cgo/internal/testerrors/badsym_test.go
+--- a/src/cmd/cgo/internal/testerrors/badsym_test.go
++++ b/src/cmd/cgo/internal/testerrors/badsym_test.go
+@@ -152,7 +152,7 @@
+ 	makeFile(godir, "go.mod", "module badsym")
+ 
+ 	// Try to build our little package.
+-	cmd := exec.Command(testenv.GoToolPath(t), "build", "-ldflags=-v")
++	cmd := exec.Command(testenv.GoToolPath(t), "build", "-x", "-work", "-ldflags=-v")
+ 	cmd.Dir = godir
+ 	output, err := cmd.CombinedOutput()
+ 
+diff --git a/src/cmd/cgo/internal/testso/so_test.go b/src/cmd/cgo/internal/testso/so_test.go
+--- a/src/cmd/cgo/internal/testso/so_test.go
++++ b/src/cmd/cgo/internal/testso/so_test.go
+@@ -115,7 +115,15 @@
+ 		}
+ 	}
+ 
+-	cmd = exec.Command(testenv.GoToolPath(t), "build", "-o", "main.exe", "main.go")
++	if runtime.GOOS == "windows" {
++		if dumpbin, err := exec.LookPath("dumpbin"); err == nil {
++			inspect := exec.Command(dumpbin, "/headers", "libcgosotest.a")
++			inspect.Dir = modRoot
++			data, err := inspect.CombinedOutput()
++			t.Logf("CF_IMPORT_LIBRARY error=%v\n%s", err, data)
++		}
++	}
++	cmd = exec.Command(testenv.GoToolPath(t), "build", "-x", "-work", "-o", "main.exe", "main.go")
+ 	cmd.Dir = modRoot
+ 	cmd.Env = append(os.Environ(), "GOPATH="+GOPATH)
+ 	out, err = cmd.CombinedOutput()

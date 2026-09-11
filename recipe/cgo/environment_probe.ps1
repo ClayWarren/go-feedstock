@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $results = [ordered]@{}
+$env:GO_CF_TRACE_DYNIMPORT = '1'
 function Probe([string]$Name, [string[]]$GoArgs) {
     Write-Host "BEGIN_PROBE=$Name"
     & go @GoArgs

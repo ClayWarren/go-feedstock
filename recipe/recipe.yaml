@@ -31,6 +31,7 @@ source:
       - patches/0015-Bind-Mercurial-fixtures-to-loopback.patch
       - patches/0016-Require-bad-symbol-rejection.patch
       - patches/0017-Use-MSVC-import-library-in-bad-symbol-test.patch
+      - patches/0018-Capture-dynamic-import-link-failures.patch
 
   # Update this with a release from https://go.dev/dl/
   - if: build_platform == "linux-64"

@@ -1,7 +1,7 @@
-name: Go ARM64 import-library diagnosis
+name: Go ARM64 dynamic-import trace
 on:
   push:
-    branches: [codex/go339-import-library]
+    branches: [codex/go339-dynimport-trace]
 permissions:
   contents: read
 jobs:
@@ -32,3 +32,11 @@ jobs:
           set "remote_url=https://github.com/%GITHUB_REPOSITORY%"
           set "sha=%GITHUB_SHA%"
           call ".scripts\run_win_build.bat"
+      - name: Preserve diagnostic Go packages
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: go-arm64-diagnostic-packages
+          path: C:\bld\**\*.conda
+          if-no-files-found: warn
+          retention-days: 7
