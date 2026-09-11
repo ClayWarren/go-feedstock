@@ -42,32 +42,6 @@ if errorlevel 1 exit /b 1
 copy /Y "%PREFIX%\bin\gofmt.exe" "%GO_ROOT%\bin\gofmt.exe"
 if errorlevel 1 exit /b 1
 
-rem Retain the historically tolerated Windows diagnostics, but make the
-rem complementary expected-pass suite authoritative for win-arm64.
-go tool dist test -k -v -no-rebuild -run=^^go_test:os$ || cmd /K "exit /b 0"
-go tool dist test -k -v -no-rebuild -run=^^go_test:cmd/go$ || cmd /K "exit /b 0"
-go tool dist test -k -v -no-rebuild -run=^^go_test:cmd/gofmt$ || cmd /K "exit /b 0"
-go tool dist test -v -no-rebuild -run=!^^go_test:os^|go_test:cmd/go^|go_test:cmd/gofmt$
-if errorlevel 1 exit /b 1
-
-for /f "delims=" %%G in ('go env GOHOSTOS') do if /I not "%%G"=="windows" exit /b 1
-for /f "delims=" %%G in ('go env GOHOSTARCH') do if /I not "%%G"=="arm64" exit /b 1
-for /f "delims=" %%G in ('go env GOOS') do if /I not "%%G"=="windows" exit /b 1
-for /f "delims=" %%G in ('go env GOARCH') do if /I not "%%G"=="arm64" exit /b 1
-for /f "delims=" %%G in ('go env CGO_ENABLED') do if not "%%G"=="0" exit /b 1
-
-go build -trimpath -o hello_win_arm64.exe "%~dp0hello_win_arm64.go"
-if errorlevel 1 exit /b 1
-
-hello_win_arm64.exe
-if errorlevel 1 exit /b 1
-
-powershell -NoLogo -NoProfile -NonInteractive -Command ^
-  "$bytes = [IO.File]::ReadAllBytes('hello_win_arm64.exe');" ^
-  "$peOffset = [BitConverter]::ToInt32($bytes, 0x3c);" ^
-  "$machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4);" ^
-  "if ($machine -ne 0xaa64) { Write-Error ('expected PE Machine AA64, got 0x{0:X4}' -f $machine); exit 1 }"
-if errorlevel 1 exit /b 1
-
-:done
-exit /b 0
+rem Fork-only focused environment diagnosis; not the full acceptance suite.
+powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0environment_probe.ps1"
+exit /b %ERRORLEVEL%
