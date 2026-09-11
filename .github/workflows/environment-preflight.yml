@@ -1,7 +1,7 @@
-name: Go ARM64 environment preflight
+name: Go ARM64 Mercurial loopback control
 on:
   push:
-    branches: [codex/go339-environment-preflight]
+    branches: [codex/go339-hg-loopback]
 permissions:
   contents: read
 jobs:
@@ -21,25 +21,19 @@ jobs:
           'GOTOOLCHAIN=local' >> $env:GITHUB_ENV
           'CGO_ENABLED=0' >> $env:GITHUB_ENV
           'C:\go-control\go\bin' >> $env:GITHUB_PATH
-      - name: Record certificate baseline and test native Git
+      - name: Test Mercurial fixture on explicit loopback
         shell: pwsh
         run: |
           $env:PATH = "$env:ProgramFiles\Git\bin;$env:PATH"
-          $env:TMP = "$env:RUNNER_TEMP\go-preflight"
-          $env:TEMP = $env:TMP
-          New-Item -ItemType Directory $env:TMP -Force | Out-Null
-          go env GOHOSTARCH GOARCH GOROOT
-          where.exe git
-          git version --build-options
-          go test -count=1 -v '-run=^Test(Go|System)Verify$/^SHA-384$' crypto/x509
-          Write-Host "CERTIFICATE_BASELINE_EXIT=$LASTEXITCODE"
-          go test -count=1 -v cmd/go/internal/modfetch/codehost cmd/go/internal/vcweb
-          if ($LASTEXITCODE -ne 0) { throw 'Native Git control failed' }
-      - name: Verify temporary root lifecycle and unchanged certificate tests
-        if: always()
-        shell: powershell
-        env:
-          GO_TEST_ALLOW_TEMPORARY_USER_ROOT: '1'
-        run: |
-          & ./ci/test_native_trust_lifecycle.ps1 -HelperPath ./ci/run_dist_tests.ps1 -GoRoot C:\go-control\go
+          $file = "$env:GOROOT\src\cmd\go\internal\vcweb\hg.go"
+          $source = [IO.File]::ReadAllText($file)
+          $old = '"--address", "localhost"'
+          if (-not $source.Contains($old)) { throw 'Missing bind expression' }
+          $source = $source.Replace($old, '"--address", "127.0.0.1"')
+          $anchor = 'if h.url == nil {'
+          if (-not $source.Contains($anchor)) { throw 'Missing proxy anchor' }
+          $source = $source.Replace($anchor, 'u.Host = "127.0.0.1:" + u.Port()' + "`n`t`t" + $anchor)
+          [IO.File]::WriteAllText($file, $source)
+          gofmt -w $file
+          go test -count=1 -timeout=5m -v cmd/go/internal/modfetch/codehost cmd/go/internal/vcweb
           exit $LASTEXITCODE
