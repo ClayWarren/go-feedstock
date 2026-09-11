@@ -1,0 +1,34 @@
+name: Go ARM64 feedstock environment diagnosis
+on:
+  push:
+    branches: [codex/go339-feedstock-environment]
+permissions:
+  contents: read
+jobs:
+  probe:
+    if: github.repository == 'ClayWarren/go-feedstock'
+    runs-on: windows-11-arm
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [win_arm64_cgofalsego_variant_strnocgo, win_arm64_cgotruego_variant_strcgo]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Build recipe and probe installed test environment
+        shell: cmd
+        env:
+          BUILD_PLATFORM: win-arm64
+          CI: github_actions
+          CONDA_BLD_PATH: C:\bld
+          CONFIG: ${{ matrix.config }}
+          MINIFORGE_HOME: C:\Miniforge
+          PYTHONUNBUFFERED: '1'
+          UPLOAD_PACKAGES: 'False'
+          RATTLER_BUILD_COLOR: always
+          RATTLER_BUILD_ENABLE_GITHUB_INTEGRATION: 'true'
+        run: |
+          set "flow_run_id=github_%GITHUB_RUN_ID%"
+          set "remote_url=https://github.com/%GITHUB_REPOSITORY%"
+          set "sha=%GITHUB_SHA%"
+          call ".scripts\run_win_build.bat"
