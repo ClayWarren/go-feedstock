@@ -22,141 +22,9 @@ jobs:
       max-parallel: 50
       matrix:
         include:
-          - CONFIG: linux_64_cgofalsego_variant_strnocgo
-            DOCKER_IMAGE: quay.io/condaforge/linux-anvil-x86_64:alma10
-            STORE_BUILD_ARTIFACTS: False
-            UPLOAD_PACKAGES: True
-            build_workspace_dir: build_artifacts
-            docker_run_args: 
-            free_disk_space: quick
-            os: ubuntu
-            pagefile_size: 0
-            resize_partitions: False
-            runs_on: ['ubuntu-latest']
-            tools_install_dir: ~/miniforge3
-          - CONFIG: linux_64_cgotruego_variant_strcgo
-            DOCKER_IMAGE: quay.io/condaforge/linux-anvil-x86_64:alma10
-            STORE_BUILD_ARTIFACTS: False
-            UPLOAD_PACKAGES: True
-            build_workspace_dir: build_artifacts
-            docker_run_args: 
-            free_disk_space: quick
-            os: ubuntu
-            pagefile_size: 0
-            resize_partitions: False
-            runs_on: ['ubuntu-latest']
-            tools_install_dir: ~/miniforge3
-          - CONFIG: linux_aarch64_cgofalsego_variant_strnocgo
-            DOCKER_IMAGE: quay.io/condaforge/linux-anvil-aarch64:alma10
-            STORE_BUILD_ARTIFACTS: False
-            UPLOAD_PACKAGES: True
-            build_workspace_dir: build_artifacts
-            docker_run_args: 
-            free_disk_space: quick
-            os: ubuntu
-            pagefile_size: 0
-            resize_partitions: False
-            runs_on: ['ubuntu-24.04-arm']
-            tools_install_dir: ~/miniforge3
-          - CONFIG: linux_aarch64_cgotruego_variant_strcgo
-            DOCKER_IMAGE: quay.io/condaforge/linux-anvil-aarch64:alma10
-            STORE_BUILD_ARTIFACTS: False
-            UPLOAD_PACKAGES: True
-            build_workspace_dir: build_artifacts
-            docker_run_args: 
-            free_disk_space: quick
-            os: ubuntu
-            pagefile_size: 0
-            resize_partitions: False
-            runs_on: ['ubuntu-24.04-arm']
-            tools_install_dir: ~/miniforge3
-          - CONFIG: linux_ppc64le_cgofalsego_variant_strnocgo
-            DOCKER_IMAGE: quay.io/condaforge/linux-anvil-x86_64:alma10
-            STORE_BUILD_ARTIFACTS: False
-            UPLOAD_PACKAGES: True
-            build_workspace_dir: build_artifacts
-            docker_run_args: 
-            free_disk_space: quick
-            os: ubuntu
-            pagefile_size: 0
-            resize_partitions: False
-            runs_on: ['ubuntu-latest']
-            tools_install_dir: ~/miniforge3
-          - CONFIG: linux_ppc64le_cgotruego_variant_strcgo
-            DOCKER_IMAGE: quay.io/condaforge/linux-anvil-x86_64:alma10
-            STORE_BUILD_ARTIFACTS: False
-            UPLOAD_PACKAGES: True
-            build_workspace_dir: build_artifacts
-            docker_run_args: 
-            free_disk_space: quick
-            os: ubuntu
-            pagefile_size: 0
-            resize_partitions: False
-            runs_on: ['ubuntu-latest']
-            tools_install_dir: ~/miniforge3
-          - CONFIG: linux_riscv64_cgofalsego_variant_strnocgo
-            DOCKER_IMAGE: quay.io/condaforge/linux-anvil-x86_64:alma10
-            STORE_BUILD_ARTIFACTS: False
-            UPLOAD_PACKAGES: True
-            build_workspace_dir: build_artifacts
-            docker_run_args: 
-            free_disk_space: quick
-            os: ubuntu
-            pagefile_size: 0
-            resize_partitions: False
-            runs_on: ['ubuntu-latest']
-            tools_install_dir: ~/miniforge3
-          - CONFIG: linux_riscv64_cgotruego_variant_strcgo
-            DOCKER_IMAGE: quay.io/condaforge/linux-anvil-x86_64:alma10
-            STORE_BUILD_ARTIFACTS: False
-            UPLOAD_PACKAGES: True
-            build_workspace_dir: build_artifacts
-            docker_run_args: 
-            free_disk_space: quick
-            os: ubuntu
-            pagefile_size: 0
-            resize_partitions: False
-            runs_on: ['ubuntu-latest']
-            tools_install_dir: ~/miniforge3
-          - CONFIG: win_64_cgofalsego_variant_strnocgo
-            STORE_BUILD_ARTIFACTS: False
-            UPLOAD_PACKAGES: True
-            build_platform: win-64
-            build_workspace_dir: D:\\bld\\
-            docker_run_args: 
-            free_disk_space: quick
-            os: windows
-            pagefile_size: 0
-            resize_partitions: False
-            runs_on: ['windows-2022']
-            tools_install_dir: D:\Miniforge
-          - CONFIG: win_64_cgotruego_variant_strcgo
-            STORE_BUILD_ARTIFACTS: False
-            UPLOAD_PACKAGES: True
-            build_platform: win-64
-            build_workspace_dir: D:\\bld\\
-            docker_run_args: 
-            free_disk_space: quick
-            os: windows
-            pagefile_size: 0
-            resize_partitions: False
-            runs_on: ['windows-2022']
-            tools_install_dir: D:\Miniforge
-          - CONFIG: win_arm64_cgofalsego_variant_strnocgo
-            STORE_BUILD_ARTIFACTS: False
-            UPLOAD_PACKAGES: True
-            build_platform: win-arm64
-            build_workspace_dir: C:\\bld\\
-            docker_run_args: 
-            free_disk_space: quick
-            os: windows
-            pagefile_size: 0
-            resize_partitions: False
-            runs_on: ['windows-11-arm']
-            tools_install_dir: C:\Miniforge
           - CONFIG: win_arm64_cgotruego_variant_strcgo
             STORE_BUILD_ARTIFACTS: False
-            UPLOAD_PACKAGES: True
+            UPLOAD_PACKAGES: False
             build_platform: win-arm64
             build_workspace_dir: C:\\bld\\
             docker_run_args: 
@@ -199,9 +67,6 @@ jobs:
         UPLOAD_PACKAGES: ${{ matrix.UPLOAD_PACKAGES }}
         RATTLER_BUILD_COLOR: always
         RATTLER_BUILD_ENABLE_GITHUB_INTEGRATION: 'true'
-        BINSTAR_TOKEN: ${{ secrets.BINSTAR_TOKEN }}
-        FEEDSTOCK_TOKEN: ${{ secrets.FEEDSTOCK_TOKEN }}
-        STAGING_BINSTAR_TOKEN: ${{ secrets.STAGING_BINSTAR_TOKEN }}
       shell: bash
       run: |
         export CONDA_BLD_PATH="${CONDA_BLD_PATH/#~/${HOME}}"
@@ -229,9 +94,6 @@ jobs:
         UPLOAD_PACKAGES: ${{ matrix.UPLOAD_PACKAGES }}
         RATTLER_BUILD_COLOR: always
         RATTLER_BUILD_ENABLE_GITHUB_INTEGRATION: 'true'
-        BINSTAR_TOKEN: ${{ secrets.BINSTAR_TOKEN }}
-        FEEDSTOCK_TOKEN: ${{ secrets.FEEDSTOCK_TOKEN }}
-        STAGING_BINSTAR_TOKEN: ${{ secrets.STAGING_BINSTAR_TOKEN }}
       shell: bash
       run: |
         export CONDA_BLD_PATH="${CONDA_BLD_PATH/#~/${HOME}}"
@@ -267,6 +129,3 @@ jobs:
         UPLOAD_PACKAGES: ${{ matrix.UPLOAD_PACKAGES }}
         RATTLER_BUILD_COLOR: always
         RATTLER_BUILD_ENABLE_GITHUB_INTEGRATION: 'true'
-        BINSTAR_TOKEN: ${{ secrets.BINSTAR_TOKEN }}
-        FEEDSTOCK_TOKEN: ${{ secrets.FEEDSTOCK_TOKEN }}
-        STAGING_BINSTAR_TOKEN: ${{ secrets.STAGING_BINSTAR_TOKEN }}
