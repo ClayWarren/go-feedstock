@@ -27,6 +27,7 @@ source:
       - patches/0011-Fix-cgo-complex-test-for-Windows-Clang.patch
       - patches/0012-Support-CGo-tests-with-Windows-Clang.patch
       - patches/0013-Fix-MSVC-BadSymbol-fixture.patch
+      - patches/0014-Fix-MSVC-response-file-probe.patch
 
   # Update this with a release from https://go.dev/dl/
   - if: build_platform == "linux-64"
