@@ -38,6 +38,7 @@ source:
       - patches/0023-Fix-MSVC-internal-load-config-and-CRT-support.patch
       - patches/0024-Diagnose-C-global-initializer.patch
       - patches/0025-Avoid-C-global-address-wrapper-shadowing.patch
+      - patches/0026-Load-selected-Clang-runtime-for-internal-linking.patch
 
   # Update this with a release from https://go.dev/dl/
   - if: build_platform == "linux-64"
