@@ -138,11 +138,20 @@ powershell -NoLogo -NoProfile -NonInteractive -Command ^
   "}"
 if errorlevel 1 exit /b 1
 
+rem Fork-only diagnostics: preserve failures while still running the full dist suite.
+set "GO_DIAGNOSTIC_STATUS=0"
+if "%GO_CGO_DIAGNOSTICS%"=="1" (
+    powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0..\windows\probe_cgo_global.ps1"
+    if errorlevel 1 set "GO_DIAGNOSTIC_STATUS=1"
+)
+
 rem Run every dist test with native Windows certificate prerequisites.
 set "GO_TEST_ALLOW_TEMPORARY_USER_ROOT="
 if "%GITHUB_ACTIONS%"=="true" if "%RUNNER_ENVIRONMENT%"=="github-hosted" set "GO_TEST_ALLOW_TEMPORARY_USER_ROOT=1"
 powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0..\windows\run_dist_tests.ps1"
 if errorlevel 1 exit /b %ERRORLEVEL%
+
+if "%GO_DIAGNOSTIC_STATUS%"=="1" exit /b 1
 
 :done
 exit /b 0

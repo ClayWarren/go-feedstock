@@ -1,0 +1,14 @@
+--- a/src/cmd/cgo/internal/test/gcc68255/a.go
++++ b/src/cmd/cgo/internal/test/gcc68255/a.go
+@@ -11,7 +11,11 @@
+ #include "c.h"
+ */
+ import "C"
++import "unsafe"
+ 
+ func F() bool {
++	if C.v == nil {
++		println("gcc68255: C global address", uintptr(unsafe.Pointer(&C.v)), "value", uintptr(unsafe.Pointer(C.v)))
++	}
+ 	return C.v != nil
+ }

@@ -120,6 +120,7 @@ jobs:
         set "sha=%GITHUB_SHA%"
         call ".scripts\run_win_build.bat"
       env:
+        GO_CGO_DIAGNOSTICS: "1"
         BUILD_PLATFORM: ${{ matrix.build_platform }}
         CI: github_actions
         CONDA_BLD_PATH: ${{ matrix.build_workspace_dir }}
@@ -129,3 +130,12 @@ jobs:
         UPLOAD_PACKAGES: ${{ matrix.UPLOAD_PACKAGES }}
         RATTLER_BUILD_COLOR: always
         RATTLER_BUILD_ENABLE_GITHUB_INTEGRATION: 'true'
+
+    - name: Retain CGo diagnostic binaries and logs
+      if: always() && matrix.os == 'windows'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: windows-arm64-cgo-diagnostics
+        path: C:\go-cgo-diagnostics
+        if-no-files-found: ignore
+        retention-days: 7

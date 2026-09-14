@@ -35,6 +35,8 @@ source:
       - patches/0020-Support-MSVC-CGo-variables-and-fixtures.patch
       - patches/0021-Fix-CGo-flag-and-archive-validation.patch
       - patches/0022-Preserve-CGo-imports-and-fix-Windows-test-setup.patch
+      - patches/0023-Fix-MSVC-internal-load-config-and-CRT-support.patch
+      - patches/0024-Diagnose-C-global-initializer.patch
 
   # Update this with a release from https://go.dev/dl/
   - if: build_platform == "linux-64"
@@ -140,6 +142,7 @@ outputs:
           secrets:
             - GITHUB_ACTIONS
             - RUNNER_ENVIRONMENT
+            - GO_CGO_DIAGNOSTICS
           content:
             # telemetry counter files are written asynchronously into $HOME, which
             # races with the test directory cleanup
