@@ -50,7 +50,9 @@ if errorlevel 1 exit /b 1
 copy /Y "%PREFIX%\bin\gofmt.exe" "%GO_ROOT%\bin\gofmt.exe"
 if errorlevel 1 exit /b 1
 
-rem Fork-only DLL initialization diagnostic, not full package acceptance.
-go test -count=1 -timeout=5m -v -run=^^TestIssue59213$ runtime
+rem Fork-only internal-link capability check. Preserve the upstream test.
+go test -count=1 -timeout=5m -v -run=^^TestCOMDATSelection$ cmd/link/internal/loadpe
+if errorlevel 1 exit /b 1
+go test -count=1 -timeout=5m -v -run=^^TestInternalLinkerCgoExec$ cmd/nm
 if errorlevel 1 exit /b 1
 exit /b 0
