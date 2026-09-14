@@ -1,0 +1,14 @@
+--- a/src/cmd/go/internal/work/exec.go
++++ b/src/cmd/go/internal/work/exec.go
+@@ -2421,7 +2421,10 @@
+ 	}
+ 
+ 	cmdargs := []any{cmd, "-o", outfile, objs, flags}
+-	_, err := sh.runOut(base.Cwd(), b.cCompilerEnv(), cmdargs...)
++	out, err := sh.runOut(base.Cwd(), b.cCompilerEnv(), cmdargs...)
++	if err != nil {
++		fmt.Fprintf(os.Stderr, "CGO_DYNIMPORT_LINK_FAILURE: %v\n%s\n", err, out)
++	}
+ 
+ 	// Note that failure is an expected outcome here, so we report output only
+ 	// in debug mode and don't report the error.
