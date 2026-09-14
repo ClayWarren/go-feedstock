@@ -108,6 +108,13 @@ if not errorlevel 1 exit /b 1
 hello_win_arm64_external.exe
 if errorlevel 1 exit /b 1
 
+rem Fork-only diagnostics: preserve failures while still running the full dist suite.
+set "GO_DIAGNOSTIC_STATUS=0"
+if "%GO_CGO_DIAGNOSTICS%"=="enabled" (
+    powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0..\windows\probe_cgo_global.ps1"
+    if errorlevel 1 set "GO_DIAGNOSTIC_STATUS=1"
+)
+
 rem Keep the focused upstream CGo checks unmasked.
 go test -count=1 runtime/cgo
 if errorlevel 1 exit /b 1
@@ -137,13 +144,6 @@ powershell -NoLogo -NoProfile -NonInteractive -Command ^
   "  if ($machine -ne 0xaa64) { Write-Error ('{0}: expected PE Machine AA64, got 0x{1:X4}' -f $file, $machine); exit 1 }" ^
   "}"
 if errorlevel 1 exit /b 1
-
-rem Fork-only diagnostics: preserve failures while still running the full dist suite.
-set "GO_DIAGNOSTIC_STATUS=0"
-if "%GO_CGO_DIAGNOSTICS%"=="1" (
-    powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0..\windows\probe_cgo_global.ps1"
-    if errorlevel 1 set "GO_DIAGNOSTIC_STATUS=1"
-)
 
 rem Run every dist test with native Windows certificate prerequisites.
 set "GO_TEST_ALLOW_TEMPORARY_USER_ROOT="

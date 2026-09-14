@@ -10,10 +10,11 @@ $go = (Get-Command go -CommandType Application -ErrorAction Stop | Select-Object
 & $go env GOOS GOARCH CC CGO_CFLAGS CGO_LDFLAGS |
     Set-Content (Join-Path $DiagnosticDir 'compiler-environment.txt')
 $result = 0
-foreach ($mode in @('auto', 'external')) {
+foreach ($mode in @('auto', 'external', 'internal')) {
     $exe = Join-Path $DiagnosticDir "cgotest-$mode-pie.exe"
     $buildArgs = @('test', '-c', '-buildmode=pie', '-o', $exe)
-    if ($mode -eq 'external') { $buildArgs += '-ldflags=-linkmode=external' }
+    if ($mode -ne 'auto') { $buildArgs += "-ldflags=-linkmode=$mode" }
+    if ($mode -eq 'internal') { $buildArgs += '-tags=internal,internal_pie' }
     $buildArgs += 'cmd/cgo/internal/test'
     $ErrorActionPreference = 'Continue'
     & $go @buildArgs 2>&1 | Tee-Object (Join-Path $DiagnosticDir "build-$mode.log") | Out-Host

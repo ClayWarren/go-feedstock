@@ -120,7 +120,7 @@ jobs:
         set "sha=%GITHUB_SHA%"
         call ".scripts\run_win_build.bat"
       env:
-        GO_CGO_DIAGNOSTICS: "1"
+        GO_CGO_DIAGNOSTICS: "enabled"
         BUILD_PLATFORM: ${{ matrix.build_platform }}
         CI: github_actions
         CONDA_BLD_PATH: ${{ matrix.build_workspace_dir }}
