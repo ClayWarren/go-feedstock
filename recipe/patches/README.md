@@ -1,3 +1,20 @@
+## Windows ARM64 CGo follow-through
+
+Patches 0013-0018 cover the malformed-symbol fixture, compiler response-file
+probe, CGo marker handling, DLL initialization, and NODUPLICATES COMDATs.
+
+- 0019 retains associative sections with their selected parent, handles packed
+  and unpacked ARM64 host unwind records, and preserves MSVC linker/debug options.
+- 0020 resolves DLL variable addresses through the C compiler and adapts the
+  enum and shared-library fixtures to MSVC-target Clang.
+- 0021 compares generated CGo flags using their escaped representation,
+  isolates fallback flags in the link-selection fixture, and recognizes empty
+  linker sentinels in the archive test.
+
+The ARM64 recipe runs the complete dist suite. Native Git and temporary
+provisioning of the pinned certificate fixture address runner prerequisites;
+no compiler/linker tests are skipped by these additions.
+
 # The initial patches - which were created as described below - were manually ported to newer version.
 The following steps need to be regarded:
  1. : disable backported patches already in new version available
