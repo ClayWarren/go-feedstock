@@ -1,0 +1,51 @@
+Limit CGo internal-link tests to toolchains that support them.
+
+Opt in only from the validated Windows ARM64 MSVC recipe test environment.
+Pure-Go internal linking and external CGo tests remain enabled.
+
+--- a/src/cmd/dist/test.go
++++ b/src/cmd/dist/test.go
+@@ -1232,6 +1232,9 @@
+ }
+ 
+ func (t *tester) internalLink() bool {
++	if goos == "windows" && goarch == "arm64" && os.Getenv("GO_TEST_MSVC_EXTERNAL_ONLY") == "1" {
++		return false // MSVC-target C objects are not supported by the internal linker.
++	}
+ 	if gohostos == "dragonfly" {
+ 		// linkmode=internal fails on dragonfly since errno is a TLS relocation.
+ 		return false
+--- a/src/internal/testenv/testenv.go
++++ b/src/internal/testenv/testenv.go
+@@ -353,6 +353,9 @@
+ // CanInternalLink reports whether the current system can link programs with
+ // internal linking.
+ func CanInternalLink(withCgo bool) bool {
++	if withCgo && runtime.GOOS == "windows" && runtime.GOARCH == "arm64" && os.Getenv("GO_TEST_MSVC_EXTERNAL_ONLY") == "1" {
++		return false
++	}
+ 	return !platform.MustLinkExternal(runtime.GOOS, runtime.GOARCH, withCgo)
+ }
+ 
+--- a/src/cmd/internal/script/scripttest/conditions.go
++++ b/src/cmd/internal/script/scripttest/conditions.go
+@@ -71,6 +71,9 @@
+ func cgoLinkExt(s *script.State) (bool, error) {
+ 	GOOS, _ := s.LookupEnv("GOOS")
+ 	GOARCH, _ := s.LookupEnv("GOARCH")
++	if externalOnly, _ := s.LookupEnv("GO_TEST_MSVC_EXTERNAL_ONLY"); GOOS == "windows" && GOARCH == "arm64" && externalOnly == "1" {
++		return true, nil
++	}
+ 	return platform.MustLinkExternal(GOOS, GOARCH, true), nil
+ }
+ 
+--- a/src/cmd/go/script_test.go
++++ b/src/cmd/go/script_test.go
+@@ -291,6 +291,7 @@
+ }
+ 
+ var extraEnvKeys = []string{
++	"GO_TEST_MSVC_EXTERNAL_ONLY", // conda: preserve the selected CGo test capabilities
+ 	"SYSTEMROOT",         // must be preserved on Windows to find DLLs; golang.org/issue/25210
+ 	"WINDIR",             // must be preserved on Windows to be able to run PowerShell command; golang.org/issue/30711
+ 	"LD_LIBRARY_PATH",    // must be preserved on Unix systems to find shared libraries
